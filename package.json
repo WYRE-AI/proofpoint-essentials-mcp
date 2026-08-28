@@ -1,0 +1,67 @@
+{
+  "name": "@wyre-ai/proofpoint-essentials-mcp",
+  "version": "0.0.0-semantically-released",
+  "description": "MCP server for Proofpoint Essentials -- MSP org, domain, user, licensing, and reporting management",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "proofpoint-essentials-mcp": "./dist/entry.js"
+  },
+  "files": [
+    "dist"
+  ],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js",
+    "lint": "eslint src",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "smoke": "node scripts/smoke-dual-era.mjs"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/WYRE-AI/proofpoint-essentials-mcp.git"
+  },
+  "keywords": [
+    "mcp",
+    "claude",
+    "proofpoint",
+    "proofpoint-essentials",
+    "email-security",
+    "msp"
+  ],
+  "author": "WYRE Technology",
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/WYRE-AI/proofpoint-essentials-mcp/issues"
+  },
+  "homepage": "https://github.com/WYRE-AI/proofpoint-essentials-mcp#readme",
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.0.0-beta.5",
+    "@modelcontextprotocol/server": "^2.0.0-beta.5",
+    "@wyre-ai/node-proofpoint-essentials": "^1.0.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@modelcontextprotocol/client": "^2.0.0-beta.5",
+    "@semantic-release/changelog": "^7.0.0",
+    "@semantic-release/github": "^12.0.9",
+    "@semantic-release/npm": "^13.1.4",
+    "@types/node": "^26.2.0",
+    "eslint": "^10.9.0",
+    "globals": "^17.11.0",
+    "semantic-release": "^25.0.9",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.67.0",
+    "vitest": "^4.1.11"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}
