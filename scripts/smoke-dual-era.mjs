@@ -13,6 +13,7 @@
 // Run after `npm run build`:
 //   node scripts/smoke-dual-era.mjs
 
+import { createHmac } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
@@ -24,6 +25,13 @@ const PORT = 38900 + Math.floor(Math.random() * 200);
 const BASE = `http://127.0.0.1:${PORT}`;
 const GATEWAY_PORT = PORT + 300;
 const GATEWAY_BASE = `http://127.0.0.1:${GATEWAY_PORT}`;
+const S2S_SECRET = 'smoke-s2s-secret-do-not-log';
+
+function mintS2sHeader(secret = S2S_SECRET, unixSeconds = Math.floor(Date.now() / 1000)) {
+  const message = `t=${unixSeconds}`;
+  const hex = createHmac('sha256', secret).update(message).digest('hex');
+  return `${message},v1=${hex}`;
+}
 
 /** The gateway-injected credential headers, per the conduit vendor-config headerMapping. */
 const CRED_HEADERS = {
@@ -57,6 +65,7 @@ async function legacyPost(body) {
     headers: {
       'Content-Type': 'application/json',
       Accept: 'application/json, text/event-stream',
+      'X-Gateway-S2S': mintS2sHeader(),
     },
     body: JSON.stringify(body),
   });
@@ -91,6 +100,7 @@ async function gatewayLeg(expectedToolCount) {
       MCP_TRANSPORT: 'http',
       MCP_HTTP_PORT: String(GATEWAY_PORT),
       MCP_HTTP_HOST: '127.0.0.1',
+      CONDUIT_S2S_SECRET: S2S_SECRET,
       LOG_LEVEL: 'error',
     },
     stdio: ['ignore', 'inherit', 'inherit'],
@@ -99,7 +109,12 @@ async function gatewayLeg(expectedToolCount) {
   const post = (headers, body) =>
     fetch(`${GATEWAY_BASE}/mcp`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', ...headers },
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        'X-Gateway-S2S': mintS2sHeader(),
+        ...headers,
+      },
       body: JSON.stringify(body),
     });
   const toolsList = { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} };
@@ -169,7 +184,9 @@ async function modernLeg() {
     // ('legacy') would silently run a plain 2025 connect sequence.
     { versionNegotiation: { mode: 'auto' } }
   );
-  const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`));
+  const transport = new StreamableHTTPClientTransport(new URL(`${BASE}/mcp`), {
+    requestInit: { headers: { 'X-Gateway-S2S': mintS2sHeader() } },
+  });
   await client.connect(transport);
   const negotiated = client.getNegotiatedProtocolVersion?.();
   check('client negotiated the 2026-07-28 era', negotiated === '2026-07-28', `negotiated=${negotiated}`);
@@ -193,6 +210,8 @@ async function main() {
       MCP_TRANSPORT: 'http',
       MCP_HTTP_PORT: String(PORT),
       MCP_HTTP_HOST: '127.0.0.1',
+      AUTH_MODE: 'env',
+      CONDUIT_S2S_SECRET: S2S_SECRET,
       // env-mode dummy credentials — tools/list never touches the vendor API
       PROOFPOINT_ESSENTIALS_USERNAME: 'dummy-username',
       PROOFPOINT_ESSENTIALS_PASSWORD: 'dummy-password',
