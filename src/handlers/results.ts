@@ -1,4 +1,5 @@
 /** Shared tool-result helpers and argument validation. */
+import type { BatchItemResult } from "@wyre-ai/node-proofpoint-essentials";
 
 export interface ToolResult {
   content: Array<{ type: "text"; text: string }>;
@@ -9,6 +10,32 @@ export interface ToolResult {
 
 export function jsonResult(value: unknown): ToolResult {
   return { content: [{ type: "text", text: JSON.stringify(value, null, 2) }] };
+}
+
+export function batchCreateResult(
+  kind: "user" | "domain",
+  results: BatchItemResult[]
+): ToolResult {
+  const summary = { requested: results.length, succeeded: 0, failed: 0, unconfirmed: 0 };
+  for (const item of results) {
+    const codes = [item.status, item.code].filter((value): value is number => typeof value === "number");
+    if (item.success === false || codes.some((code) => code < 200 || code >= 300)) {
+      summary.failed++;
+    } else if (item.success === true || codes.length > 0) {
+      summary.succeeded++;
+    } else {
+      summary.unconfirmed++;
+    }
+  }
+  const result = jsonResult({ summary, results });
+  if (summary.failed > 0) {
+    result.isError = true;
+    result.content[0].text =
+      `${summary.failed} of ${summary.requested} ${kind} create items failed; ` +
+      `${summary.succeeded} succeeded and should not be retried. See results for per-item errors.\n\n` +
+      result.content[0].text;
+  }
+  return result;
 }
 
 export function textResult(text: string): ToolResult {

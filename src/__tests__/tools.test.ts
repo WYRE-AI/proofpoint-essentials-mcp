@@ -55,8 +55,11 @@ describe("TOOLS surface", () => {
     const users = tool.inputSchema.properties!.users as {
       items: { properties: Record<string, unknown> };
     };
-    expect(users.items.properties).not.toHaveProperty("email");
-    expect(users.items.properties).not.toHaveProperty("lastname");
+    for (const field of [
+      "email", "lastname", "uid", "password", "creation_date", "last_update", "last_login",
+    ]) {
+      expect(users.items.properties).not.toHaveProperty(field);
+    }
   });
 
   it("domains_create requires a non-empty string array", () => {

@@ -7,7 +7,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { InputRequiredResult } from "@modelcontextprotocol/server";
-import { NotFoundError, ValidationError, type ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
+import { NotFoundError, ValidationError, type BatchItemResult, type ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
 import { CONFIRM_ARG, type ElicitationContext } from "../elicitation.js";
 import { handleToolCall } from "../handlers/index.js";
 import type { ToolResult } from "../handlers/results.js";
@@ -172,7 +172,7 @@ describe("write handlers (non-destructive)", () => {
     expect(client.domains.create).toHaveBeenCalledWith("acme.com", ["a.acme.com", "b.acme.com"]);
   });
 
-  it("proofpoint_essentials_users_create passes through the users array", async () => {
+  it("proofpoint_essentials_users_create passes equivalent user inputs", async () => {
     const client = stubClient();
     const users = [{ primary_email: "jdoe@example.com", firstname: "Jane", surname: "Doe" }];
     await handleToolCall(client, "proofpoint_essentials_users_create", {
@@ -180,7 +180,27 @@ describe("write handlers (non-destructive)", () => {
       users,
     });
     expect(client.users.create).toHaveBeenCalledWith("acme.com", users);
-    expect(vi.mocked(client.users.create).mock.calls[0][1]).toBe(users);
+    expect(vi.mocked(client.users.create).mock.calls[0][1]).toEqual(users);
+  });
+
+  it("strips response-only user fields without mutating caller objects", async () => {
+    const client = stubClient();
+    const input = {
+      primary_email: "jane@acme.com", firstname: "Jane", surname: "Doe",
+      custom: { value: "kept" },
+    };
+    const user = Object.freeze({
+      ...input, uid: 123, password: "secret", creation_date: "today",
+      last_update: "today", last_login: "today",
+    });
+    await handleToolCall(client, "proofpoint_essentials_users_create", {
+      orgDomain: "acme.com", users: Object.freeze([user]),
+    });
+    expect(client.users.create).toHaveBeenCalledWith("acme.com", [input]);
+    expect(user).toEqual({
+      ...input, uid: 123, password: "secret", creation_date: "today",
+      last_update: "today", last_login: "today",
+    });
   });
 
   it.each([
@@ -207,6 +227,85 @@ describe("write handlers (non-destructive)", () => {
     const client = stubClient();
     await handleToolCall(client, "proofpoint_essentials_token_create", {});
     expect(client.token.create).toHaveBeenCalledWith(undefined);
+  });
+});
+
+describe.each(["users", "domains"] as const)("%s create batch results", (resource) => {
+  const cases: Array<{
+    name: string;
+    results: BatchItemResult[];
+    succeeded: number;
+    failed: number;
+    unconfirmed: number;
+  }> = [
+    {
+      name: "all-success",
+      results: [{ success: true, status: 201 }, { success: true }],
+      succeeded: 2, failed: 0, unconfirmed: 0,
+    },
+    {
+      name: "207-style mixed success and failure",
+      results: [{ success: true, primary_email: "created@acme.com" },
+        { success: false, status: 409, message: "exists" }],
+      succeeded: 1, failed: 1, unconfirmed: 0,
+    },
+    {
+      name: "explicit failure from a 201 response",
+      results: [{ success: false, status: 400, message: "bad" }],
+      succeeded: 0, failed: 1, unconfirmed: 0,
+    },
+    {
+      name: "non-2xx code without a success flag",
+      results: [{ code: 409, message: "exists" }],
+      succeeded: 0, failed: 1, unconfirmed: 0,
+    },
+    {
+      name: "non-2xx status without a success flag",
+      results: [{ status: 400, message: "bad" }],
+      succeeded: 0, failed: 1, unconfirmed: 0,
+    },
+    {
+      name: "unconfirmed items",
+      results: [{ primary_email: "unknown@acme.com" }, { message: "accepted" }],
+      succeeded: 0, failed: 0, unconfirmed: 2,
+    },
+    {
+      name: "2xx status without a success flag",
+      results: [{ status: 201 }],
+      succeeded: 1, failed: 0, unconfirmed: 0,
+    },
+    {
+      name: "success flag contradicted by a non-2xx status",
+      results: [{ success: true, status: 500, message: "partial" }],
+      succeeded: 0, failed: 1, unconfirmed: 0,
+    },
+  ];
+  it.each(cases)("$name", async ({ results, succeeded, failed, unconfirmed }) => {
+    const original = structuredClone(results);
+    const client = stubClient({
+      [resource]: { create: vi.fn().mockResolvedValue(results) },
+    });
+    const result = asTool(await handleToolCall(
+      client,
+      `proofpoint_essentials_${resource}_create`,
+      {
+        orgDomain: "acme.com",
+        users: results.map((_, index) => ({ primary_email: `user${index}@acme.com` })),
+        domains: results.map((_, index) => `domain${index}.acme.com`),
+      }
+    ));
+    expect(result.isError).toBe(failed > 0 ? true : undefined);
+    const text = result.content[0].text;
+    const payload = JSON.parse(failed > 0 ? text.slice(text.indexOf("\n\n") + 2) : text);
+    expect(payload).toEqual({
+      summary: { requested: results.length, succeeded, failed, unconfirmed },
+      results: original,
+    });
+    expect(results).toEqual(original);
+    if (failed > 0) {
+      expect(text).toContain(`${failed} of ${results.length}`);
+      expect(text).toContain(`${succeeded} succeeded and should not be retried`);
+    }
   });
 });
 

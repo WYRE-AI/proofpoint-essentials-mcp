@@ -107,7 +107,8 @@ export const TOOLS: Tool[] = [
     name: "proofpoint_essentials_domains_create",
     description:
       "Add one or more domains to an organization. Each name is sent as a Domain object {name}. " +
-      "Results are returned as a per-item array, including 207 partial-success responses.",
+      "Returns summary and per-item results; flagged as an error if any item failed. " +
+      "Succeeded items are created and must not be retried.",
     inputSchema: {
       type: "object",
       properties: {
@@ -186,8 +187,10 @@ export const TOOLS: Tool[] = [
     name: "proofpoint_essentials_users_create",
     description:
       "Add one or more users to an organization. Users are sent to Proofpoint as a bare array of " +
-      "User objects (primary_email required); results are returned as a per-item array, including " +
-      "207 partial-success responses.",
+      "User objects (primary_email required). Response-only fields " +
+      "(uid, password, creation_date, last_update, last_login) are ignored on create. " +
+      "Returns summary and per-item results; flagged as an error if any item failed. " +
+      "Succeeded items are created and must not be retried.",
     inputSchema: {
       type: "object",
       properties: {

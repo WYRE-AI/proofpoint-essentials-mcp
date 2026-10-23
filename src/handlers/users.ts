@@ -1,8 +1,9 @@
 /** User tool handlers. */
 import type { InputRequiredResult } from "@modelcontextprotocol/server";
-import type { ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
+import type { BatchItemResult, ProofpointEssentialsClient, ProofpointUserInput } from "@wyre-ai/node-proofpoint-essentials";
 import { confirmDestructive, type ElicitationContext } from "../elicitation.js";
 import {
+  batchCreateResult,
   errorResult,
   jsonResult,
   requireObject,
@@ -48,12 +49,15 @@ export async function createUsers(
       );
     }
   }
-  // Keep the original array; the SDK owns request serialization.
-  const result = await client.users.create(
-    orgDomain,
-    users as Parameters<typeof client.users.create>[1]
-  );
-  return jsonResult(result);
+  const inputs: ProofpointUserInput[] = users.map((user) => {
+    const input = { ...user } as ProofpointUserInput;
+    for (const field of ["uid", "creation_date", "last_update", "last_login", "password"]) {
+      delete input[field];
+    }
+    return input;
+  });
+  const results: BatchItemResult[] = await client.users.create(orgDomain, inputs);
+  return batchCreateResult("user", results);
 }
 
 export async function updateUser(
