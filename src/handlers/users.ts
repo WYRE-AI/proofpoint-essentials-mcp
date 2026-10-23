@@ -57,7 +57,7 @@ export async function createUsers(
     return input;
   });
   const results: BatchItemResult[] = await client.users.create(orgDomain, inputs);
-  return batchCreateResult("user", results);
+  return batchCreateResult("user", results, inputs.length);
 }
 
 export async function updateUser(

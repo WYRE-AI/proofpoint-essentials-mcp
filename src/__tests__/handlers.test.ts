@@ -234,10 +234,29 @@ describe.each(["users", "domains"] as const)("%s create batch results", (resourc
   const cases: Array<{
     name: string;
     results: BatchItemResult[];
+    submitted?: number;
     succeeded: number;
     failed: number;
     unconfirmed: number;
   }> = [
+    {
+      name: "missing successful response items",
+      submitted: 3,
+      results: [{ success: true, status: 201 }],
+      succeeded: 1, failed: 0, unconfirmed: 2,
+    },
+    {
+      name: "missing failed response items",
+      submitted: 3,
+      results: [{ success: false, status: 400, message: "bad" }],
+      succeeded: 0, failed: 1, unconfirmed: 2,
+    },
+    {
+      name: "over-return",
+      submitted: 1,
+      results: [{ success: true }, { status: 201 }],
+      succeeded: 2, failed: 0, unconfirmed: 0,
+    },
     {
       name: "all-success",
       results: [{ success: true, status: 201 }, { success: true }],
@@ -280,7 +299,7 @@ describe.each(["users", "domains"] as const)("%s create batch results", (resourc
       succeeded: 0, failed: 1, unconfirmed: 0,
     },
   ];
-  it.each(cases)("$name", async ({ results, succeeded, failed, unconfirmed }) => {
+  it.each(cases)("$name", async ({ results, submitted = results.length, succeeded, failed, unconfirmed }) => {
     const original = structuredClone(results);
     const client = stubClient({
       [resource]: { create: vi.fn().mockResolvedValue(results) },
@@ -290,23 +309,61 @@ describe.each(["users", "domains"] as const)("%s create batch results", (resourc
       `proofpoint_essentials_${resource}_create`,
       {
         orgDomain: "acme.com",
-        users: results.map((_, index) => ({ primary_email: `user${index}@acme.com` })),
-        domains: results.map((_, index) => `domain${index}.acme.com`),
+        users: Array.from({ length: submitted }, (_, index) => ({ primary_email: `user${index}@acme.com` })),
+        domains: Array.from({ length: submitted }, (_, index) => `domain${index}.acme.com`),
       }
     ));
     expect(result.isError).toBe(failed > 0 ? true : undefined);
     const text = result.content[0].text;
     const payload = JSON.parse(failed > 0 ? text.slice(text.indexOf("\n\n") + 2) : text);
     expect(payload).toEqual({
-      summary: { requested: results.length, succeeded, failed, unconfirmed },
-      results: original,
+      summary: { requested: Math.max(submitted, results.length), returned: results.length, succeeded, failed, unconfirmed },
+      results: failed > 0 ? original.map((item, index) => ({
+        index,
+        outcome: item.success === false || [item.status, item.code].some(
+          (code) => typeof code === "number" && (code < 200 || code >= 300)
+        ) ? "failed" : item.success === true || typeof item.status === "number" || typeof item.code === "number"
+          ? "succeeded" : "unconfirmed",
+        ...(typeof item.status === "number" ? { status: item.status } : {}),
+        ...(typeof item.code === "number" ? { code: item.code } : {}),
+        ...(typeof item.message === "string" ? { message: item.message } : {}),
+      })) : original,
     });
+    expect(payload.summary.requested).toBe(succeeded + failed + unconfirmed);
     expect(results).toEqual(original);
     if (failed > 0) {
-      expect(text).toContain(`${failed} of ${results.length}`);
+      expect(text).toContain(`${failed} of ${Math.max(submitted, results.length)}`);
       expect(text).toContain(`${succeeded} succeeded and should not be retried`);
+      if (unconfirmed > 0) expect(text).toContain(`${unconfirmed} unconfirmed`);
+      else expect(text.split("\n\n")[0]).not.toContain("unconfirmed");
     }
   });
+  it.each(["message", "error", "detail", "reason", "description", "object error"])(
+    "redacts personal fields and emails from %s",
+    async (field) => {
+      const message = "user jane.doe@acme.com already exists";
+      const item = {
+        success: false, status: 400, code: "ignored",
+        primary_email: "jane.doe@acme.com", email: "private@acme.com",
+        firstname: "JaneSecret", surname: "DoeSecret", lastname: "LastSecret",
+        alias_emails: ["alias@acme.com"], name: "private-domain.acme.com",
+        [field === "object error" ? "error" : field]: field === "object error" ? { message } : message,
+      };
+      const client = stubClient({ [resource]: { create: vi.fn().mockResolvedValue([item]) } });
+      const result = asTool(await handleToolCall(client, `proofpoint_essentials_${resource}_create`, {
+        orgDomain: "acme.com", users: [{ primary_email: "jane.doe@acme.com" }], domains: ["acme.com"],
+      }));
+      expect(result.isError).toBe(true);
+      const text = result.content[0].text;
+      for (const secret of ["jane.doe@acme.com", "JaneSecret", "DoeSecret", "LastSecret", "primary_email", "private-domain.acme.com", "alias@acme.com"]) {
+        expect(text).not.toContain(secret);
+      }
+      expect(JSON.parse(text.slice(text.indexOf("\n\n") + 2)).results).toEqual([
+        { index: 0, outcome: "failed", status: 400, message: "user [redacted-email] already exists" },
+      ]);
+    }
+  );
+
 });
 
 describe("high-impact handlers (warning-only, no runtime gate)", () => {

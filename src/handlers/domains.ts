@@ -29,7 +29,7 @@ export async function createDomains(
   const orgDomain = requireString(args, "orgDomain");
   const domains = requireStringArray(args, "domains");
   const results: BatchItemResult[] = await client.domains.create(orgDomain, domains);
-  return batchCreateResult("domain", results);
+  return batchCreateResult("domain", results, domains.length);
 }
 
 export async function updateDomain(
