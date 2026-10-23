@@ -17,6 +17,7 @@ import { ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials"
 import { handleToolCall } from "./handlers/index.js";
 import { errorResult } from "./handlers/results.js";
 import { TOOLS } from "./tools.js";
+import { sanitize } from "./utils/sanitize.js";
 import { logger } from "./utils/logger.js";
 
 export const SERVER_NAME = "proofpoint-essentials-mcp";
@@ -148,7 +149,9 @@ export function createMcpServer(credentials?: ProofpointEssentialsCredentials): 
       client ??= new ProofpointEssentialsClient(credentials);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      return errorResult(`Invalid Proofpoint Essentials credentials: ${message}`);
+      return errorResult(sanitize(`Invalid Proofpoint Essentials credentials: ${message}`, {
+        redactHostnames: name.startsWith("proofpoint_essentials_domains_"),
+      }));
     }
 
     return handleToolCall(client, name, (args ?? {}) as Record<string, unknown>, {

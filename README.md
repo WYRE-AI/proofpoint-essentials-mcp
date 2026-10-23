@@ -161,14 +161,14 @@ not scoped to a single org).
 
 ### Domains
 - `proofpoint_essentials_domains_list`
-- `proofpoint_essentials_domains_create` — params: `orgDomain`, non-empty `domains: string[]`. Each name is sent as a Domain object `{name}`; returns `{ summary: { requested, returned, succeeded, failed, unconfirmed }, results }` with raw per-item results. Requested is the submitted count (raised to returned only on over-return); missing response items count as unconfirmed. Any failed item sets `isError` and makes `results` a redacted per-item list `{ index, outcome, status, code, message }` with no emails or names; succeeded items are created and must not be retried.
+- `proofpoint_essentials_domains_create` — params: `orgDomain`, non-empty `domains: string[]`. Each name is sent as a Domain object `{name}`; returns `{ summary: { requested, returned, succeeded, failed, unconfirmed }, results }` with raw per-item results only when every returned item succeeded and none are unconfirmed, including missing items. Requested is the submitted count (raised to returned only on over-return); missing response items count as unconfirmed. Any failed item sets `isError`. Any failure or unconfirmed item makes `results` a cleaned per-item list `{ index, outcome, status, code, message }` with other fields omitted; succeeded items are created and must not be retried.
 - `proofpoint_essentials_domains_update` ⚠ high-impact
 - `proofpoint_essentials_domains_delete` ⚠ destructive, irreversible
 
 ### Users
 - `proofpoint_essentials_users_list`
 - `proofpoint_essentials_users_get`
-- `proofpoint_essentials_users_create` — params: `orgDomain`, non-empty `users[]` with required `primary_email` and optional `firstname`, `surname`, `type`, `is_active`, `send_welcome_email`, `alias_emails`. Users are sent to Proofpoint as a bare array of User objects; returns `{ summary: { requested, returned, succeeded, failed, unconfirmed }, results }` with raw per-item results, including 207 partial-success responses. Requested is the submitted count (raised to returned only on over-return); missing response items count as unconfirmed. Any failed item sets `isError` and makes `results` a redacted per-item list `{ index, outcome, status, code, message }` with no emails or names; succeeded items are created and must not be retried. Response-only fields (uid, password, creation_date, last_update, last_login) are ignored on create.
+- `proofpoint_essentials_users_create` — params: `orgDomain`, non-empty `users[]` with required `primary_email` and optional `firstname`, `surname`, `type`, `is_active`, `send_welcome_email`, `alias_emails`. Users are sent to Proofpoint as a bare array of User objects; returns `{ summary: { requested, returned, succeeded, failed, unconfirmed }, results }` with raw per-item results only when every returned item succeeded and none are unconfirmed, including missing items. Requested is the submitted count (raised to returned only on over-return); missing response items count as unconfirmed. Any failed item sets `isError`. Any failure or unconfirmed item makes `results` a cleaned per-item list `{ index, outcome, status, code, message }` with other fields omitted; succeeded items are created and must not be retried. Response-only fields (uid, password, creation_date, last_update, last_login) are ignored on create.
 - `proofpoint_essentials_users_update` ⚠ high-impact
 - `proofpoint_essentials_users_delete` ⚠ destructive, irreversible
 
@@ -207,6 +207,17 @@ npm run smoke   # requires a prior `npm run build`
 
 Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md), or open an
 issue to discuss changes.
+
+## Error redaction
+
+Error text and cleaned batch-result messages redact email addresses, including supported
+encoded @ forms (`%40`, `%2540`, `&#64;`, `&#x40;`, `&commat;`, literal `\u0040`,
+and full-width `＠`), spaced @ forms, and quoted local parts. Domain-tool errors
+and cleaned domain-create messages also redact bare hostnames. Vendor error bodies
+are reduced to statusCode and scalar code metadata; other vendor fields are omitted.
+Each error text or cleaned per-item message is capped at 300 Unicode code points
+after redaction (the aggregate batch JSON is not capped). Confirmed all-success
+results retain raw data; this is targeted redaction, not general PII removal.
 
 ## License
 

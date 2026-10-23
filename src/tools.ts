@@ -108,8 +108,8 @@ export const TOOLS: Tool[] = [
     description:
       "Add one or more domains to an organization. Each name is sent as a Domain object {name}. " +
       "Returns summary (requested, returned, succeeded, failed, unconfirmed); missing items are unconfirmed. " +
-      "Any failure sets isError and redacts per-item results to index, outcome, numeric status/code, and message. " +
-      "Succeeded items are created and must not be retried.",
+      "Any failure sets isError; failures or unconfirmed items reduce results to index, outcome, numeric status/code, and message. " +
+      "Error text and cleaned messages redact emails (including encoded @, spaced @, and quoted local parts), capped at 300 Unicode code points each; domain errors and messages also redact bare hostnames. Vendor error bodies retain only statusCode and scalar code metadata. Raw results are returned only when all items succeeded and none are unconfirmed. Succeeded items are created and must not be retried.",
     inputSchema: {
       type: "object",
       properties: {
@@ -191,8 +191,8 @@ export const TOOLS: Tool[] = [
       "User objects (primary_email required). Response-only fields " +
       "(uid, password, creation_date, last_update, last_login) are ignored on create. " +
       "Returns summary (requested, returned, succeeded, failed, unconfirmed); missing items are unconfirmed. " +
-      "Any failure sets isError and redacts per-item results to index, outcome, numeric status/code, and message. " +
-      "Succeeded items are created and must not be retried.",
+      "Any failure sets isError; failures or unconfirmed items reduce results to index, outcome, numeric status/code, and message. " +
+      "Error text and cleaned messages redact emails (including encoded @, spaced @, and quoted local parts), capped at 300 Unicode code points each. Vendor error bodies retain only statusCode and scalar code metadata. Raw results are returned only when all items succeeded and none are unconfirmed. Succeeded items are created and must not be retried.",
     inputSchema: {
       type: "object",
       properties: {

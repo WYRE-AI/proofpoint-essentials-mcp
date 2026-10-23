@@ -36,6 +36,7 @@ import {
   resolveEnvCredentials,
   resolveGatewayCredentials,
 } from "./mcp-server.js";
+import { sanitize } from "./utils/sanitize.js";
 import { logger } from "./utils/logger.js";
 import { verifyS2sHeader, S2S_HEADER } from "./s2s-verify.js";
 
@@ -144,7 +145,7 @@ const CORS_ALLOW_HEADERS = [
 /** stdio (default). Fresh server per process; env-mode credentials. */
 function startStdioTransport(): void {
   serveStdio(() => createMcpServer(resolveEnvCredentials().creds), {
-    onerror: (error) => logger.error("stdio serving error", { error: error.message }),
+    onerror: (error) => logger.error("stdio serving error", { error: sanitize(error.message) }),
   });
   logger.info("Proofpoint Essentials MCP server running on stdio");
 }
@@ -156,10 +157,10 @@ export async function startHttpTransport(): Promise<HttpServer> {
 
   const mcpHandler = createMcpHandler(makeMcpServerFactory({ gatewayMode: isGatewayMode }), {
     legacy: "stateless",
-    onerror: (error) => logger.error("MCP serving error", { error: error.message }),
+    onerror: (error) => logger.error("MCP serving error", { error: sanitize(error.message) }),
   });
   const handleMcpRequest = toNodeHandler(mcpHandler, {
-    onerror: (error) => logger.error("MCP request adapter error", { error: error.message }),
+    onerror: (error) => logger.error("MCP request adapter error", { error: sanitize(error.message) }),
   });
 
   const httpServer = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -241,7 +242,7 @@ export async function startHttpTransport(): Promise<HttpServer> {
       () => undefined,
       (error: unknown) => {
         logger.error("Error closing MCP handler", {
-          error: error instanceof Error ? error.message : String(error),
+          error: sanitize(error instanceof Error ? error.message : String(error)),
         });
       }
     );
@@ -291,7 +292,7 @@ async function main() {
 if (process.env.VITEST !== "true") {
   main().catch((error) => {
     logger.error("Fatal startup error", {
-      error: error instanceof Error ? error.message : String(error),
+      error: sanitize(error instanceof Error ? error.message : String(error)),
     });
     process.exit(1);
   });

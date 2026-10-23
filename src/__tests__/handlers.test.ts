@@ -93,7 +93,7 @@ describe("unknown tool / invalid arguments / vendor errors", () => {
     expect(client.orgs.get).not.toHaveBeenCalled();
   });
 
-  it("ServiceError subclasses are formatted with status code and response", async () => {
+  it("ServiceError subclasses retain status but omit vendor body", async () => {
     const client = stubClient({
       orgs: { get: vi.fn().mockRejectedValue(new NotFoundError("not found", { detail: "no such org" })) },
     });
@@ -102,7 +102,8 @@ describe("unknown tool / invalid arguments / vendor errors", () => {
     );
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("HTTP 404");
-    expect(result.content[0].text).toContain("no such org");
+    expect(result.content[0].text).not.toContain("no such org");
+    expect(result.content[0].text).toContain('"statusCode":404');
   });
 
   it("ValidationError formats cleanly even with an errors array on the instance", async () => {
@@ -318,7 +319,7 @@ describe.each(["users", "domains"] as const)("%s create batch results", (resourc
     const payload = JSON.parse(failed > 0 ? text.slice(text.indexOf("\n\n") + 2) : text);
     expect(payload).toEqual({
       summary: { requested: Math.max(submitted, results.length), returned: results.length, succeeded, failed, unconfirmed },
-      results: failed > 0 ? original.map((item, index) => ({
+      results: succeeded !== results.length || unconfirmed > 0 ? original.map((item, index) => ({
         index,
         outcome: item.success === false || [item.status, item.code].some(
           (code) => typeof code === "number" && (code < 200 || code >= 300)
