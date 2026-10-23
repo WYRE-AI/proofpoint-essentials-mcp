@@ -1,8 +1,9 @@
 /** Domain tool handlers. */
 import type { InputRequiredResult } from "@modelcontextprotocol/server";
-import type { ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
+import type { BatchItemResult, ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
 import { confirmDestructive, type ElicitationContext } from "../elicitation.js";
 import {
+  batchCreateResult,
   errorResult,
   jsonResult,
   requireObject,
@@ -27,8 +28,8 @@ export async function createDomains(
 ): Promise<ToolResult> {
   const orgDomain = requireString(args, "orgDomain");
   const domains = requireStringArray(args, "domains");
-  const result = await client.domains.create(orgDomain, domains);
-  return jsonResult(result);
+  const results: BatchItemResult[] = await client.domains.create(orgDomain, domains);
+  return batchCreateResult("domain", results, domains.length);
 }
 
 export async function updateDomain(

@@ -161,16 +161,18 @@ not scoped to a single org).
 
 ### Domains
 - `proofpoint_essentials_domains_list`
-- `proofpoint_essentials_domains_create` — batch add
+- `proofpoint_essentials_domains_create` — params: `orgDomain`, non-empty `domains: string[]`. Each name is sent as a Domain object `{name}`; returns `{ summary: { requested, returned, succeeded, failed, unconfirmed }, results }` with raw per-item results. Requested is the submitted count (raised to returned only on over-return); missing response items count as unconfirmed. Any failed item sets `isError` and makes `results` a redacted per-item list `{ index, outcome, status, code, message }` with no emails or names; succeeded items are created and must not be retried.
 - `proofpoint_essentials_domains_update` ⚠ high-impact
 - `proofpoint_essentials_domains_delete` ⚠ destructive, irreversible
 
 ### Users
 - `proofpoint_essentials_users_list`
 - `proofpoint_essentials_users_get`
-- `proofpoint_essentials_users_create` — batch add
+- `proofpoint_essentials_users_create` — params: `orgDomain`, non-empty `users[]` with required `primary_email` and optional `firstname`, `surname`, `type`, `is_active`, `send_welcome_email`, `alias_emails`. Users are sent to Proofpoint as a bare array of User objects; returns `{ summary: { requested, returned, succeeded, failed, unconfirmed }, results }` with raw per-item results, including 207 partial-success responses. Requested is the submitted count (raised to returned only on over-return); missing response items count as unconfirmed. Any failed item sets `isError` and makes `results` a redacted per-item list `{ index, outcome, status, code, message }` with no emails or names; succeeded items are created and must not be retried. Response-only fields (uid, password, creation_date, last_update, last_login) are ignored on create.
 - `proofpoint_essentials_users_update` ⚠ high-impact
 - `proofpoint_essentials_users_delete` ⚠ destructive, irreversible
+
+The create serialization and result normalization fix requires `@wyre-ai/node-proofpoint-essentials >= 1.0.2`, which this package depends on.
 
 ### Endpoint discovery
 - `proofpoint_essentials_endpoint_discover` — resolve which region hosts a customer domain

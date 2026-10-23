@@ -1,8 +1,9 @@
 /** User tool handlers. */
 import type { InputRequiredResult } from "@modelcontextprotocol/server";
-import type { ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
+import type { BatchItemResult, ProofpointEssentialsClient, ProofpointUserInput } from "@wyre-ai/node-proofpoint-essentials";
 import { confirmDestructive, type ElicitationContext } from "../elicitation.js";
 import {
+  batchCreateResult,
   errorResult,
   jsonResult,
   requireObject,
@@ -37,8 +38,26 @@ export async function createUsers(
 ): Promise<ToolResult> {
   const orgDomain = requireString(args, "orgDomain");
   const users = requireObjectArray(args, "users");
-  const result = await client.users.create(orgDomain, users);
-  return jsonResult(result);
+  for (const [index, user] of users.entries()) {
+    if (typeof user.primary_email !== "string" || user.primary_email.trim() === "") {
+      const hints = [
+        "email" in user ? 'Use "primary_email" instead of "email".' : "",
+        "lastname" in user ? 'Use "surname" instead of "lastname".' : "",
+      ].filter(Boolean).join(" ");
+      return errorResult(
+        `users[${index}].primary_email is required and must be a non-empty string.${hints ? ` ${hints}` : ""}`
+      );
+    }
+  }
+  const inputs: ProofpointUserInput[] = users.map((user) => {
+    const input = { ...user } as ProofpointUserInput;
+    for (const field of ["uid", "creation_date", "last_update", "last_login", "password"]) {
+      delete input[field];
+    }
+    return input;
+  });
+  const results: BatchItemResult[] = await client.users.create(orgDomain, inputs);
+  return batchCreateResult("user", results, inputs.length);
 }
 
 export async function updateUser(

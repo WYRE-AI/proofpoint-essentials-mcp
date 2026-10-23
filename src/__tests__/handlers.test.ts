@@ -7,7 +7,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { InputRequiredResult } from "@modelcontextprotocol/server";
-import { NotFoundError, ValidationError, type ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
+import { NotFoundError, ValidationError, type BatchItemResult, type ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
 import { CONFIRM_ARG, type ElicitationContext } from "../elicitation.js";
 import { handleToolCall } from "../handlers/index.js";
 import type { ToolResult } from "../handlers/results.js";
@@ -172,13 +172,55 @@ describe("write handlers (non-destructive)", () => {
     expect(client.domains.create).toHaveBeenCalledWith("acme.com", ["a.acme.com", "b.acme.com"]);
   });
 
-  it("proofpoint_essentials_users_create passes through the users array", async () => {
+  it("proofpoint_essentials_users_create passes equivalent user inputs", async () => {
     const client = stubClient();
+    const users = [{ primary_email: "jdoe@example.com", firstname: "Jane", surname: "Doe" }];
     await handleToolCall(client, "proofpoint_essentials_users_create", {
       orgDomain: "acme.com",
-      users: [{ email: "new@acme.com" }],
+      users,
     });
-    expect(client.users.create).toHaveBeenCalledWith("acme.com", [{ email: "new@acme.com" }]);
+    expect(client.users.create).toHaveBeenCalledWith("acme.com", users);
+    expect(vi.mocked(client.users.create).mock.calls[0][1]).toEqual(users);
+  });
+
+  it("strips response-only user fields without mutating caller objects", async () => {
+    const client = stubClient();
+    const input = {
+      primary_email: "jane@acme.com", firstname: "Jane", surname: "Doe",
+      custom: { value: "kept" },
+    };
+    const user = Object.freeze({
+      ...input, uid: 123, password: "secret", creation_date: "today",
+      last_update: "today", last_login: "today",
+    });
+    await handleToolCall(client, "proofpoint_essentials_users_create", {
+      orgDomain: "acme.com", users: Object.freeze([user]),
+    });
+    expect(client.users.create).toHaveBeenCalledWith("acme.com", [input]);
+    expect(user).toEqual({
+      ...input, uid: 123, password: "secret", creation_date: "today",
+      last_update: "today", last_login: "today",
+    });
+  });
+
+  it.each([
+    [{ email: "jdoe@example.com" }, "primary_email"],
+    [{ email: "jdoe@example.com", lastname: "Doe" }, "surname"],
+    [{ primary_email: "" }, "primary_email"],
+    [{ primary_email: "   " }, "primary_email"],
+    [{ primary_email: 123 }, "primary_email"],
+  ])("rejects invalid user input %j before calling the SDK", async (user, hint) => {
+    const client = stubClient();
+    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_create", {
+      orgDomain: "acme.com",
+      users: [{ primary_email: "valid@acme.com" }, user],
+    }));
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("users[1].primary_email");
+    expect(result.content[0].text).toContain(hint);
+    if ("email" in user) expect(result.content[0].text).toContain('Use "primary_email" instead of "email"');
+    if ("lastname" in user) expect(result.content[0].text).toContain('Use "surname" instead of "lastname"');
+    expect(client.users.create).not.toHaveBeenCalled();
   });
 
   it("proofpoint_essentials_token_create passes an optional body through", async () => {
@@ -186,6 +228,142 @@ describe("write handlers (non-destructive)", () => {
     await handleToolCall(client, "proofpoint_essentials_token_create", {});
     expect(client.token.create).toHaveBeenCalledWith(undefined);
   });
+});
+
+describe.each(["users", "domains"] as const)("%s create batch results", (resource) => {
+  const cases: Array<{
+    name: string;
+    results: BatchItemResult[];
+    submitted?: number;
+    succeeded: number;
+    failed: number;
+    unconfirmed: number;
+  }> = [
+    {
+      name: "missing successful response items",
+      submitted: 3,
+      results: [{ success: true, status: 201 }],
+      succeeded: 1, failed: 0, unconfirmed: 2,
+    },
+    {
+      name: "missing failed response items",
+      submitted: 3,
+      results: [{ success: false, status: 400, message: "bad" }],
+      succeeded: 0, failed: 1, unconfirmed: 2,
+    },
+    {
+      name: "over-return",
+      submitted: 1,
+      results: [{ success: true }, { status: 201 }],
+      succeeded: 2, failed: 0, unconfirmed: 0,
+    },
+    {
+      name: "all-success",
+      results: [{ success: true, status: 201 }, { success: true }],
+      succeeded: 2, failed: 0, unconfirmed: 0,
+    },
+    {
+      name: "207-style mixed success and failure",
+      results: [{ success: true, primary_email: "created@acme.com" },
+        { success: false, status: 409, message: "exists" }],
+      succeeded: 1, failed: 1, unconfirmed: 0,
+    },
+    {
+      name: "explicit failure from a 201 response",
+      results: [{ success: false, status: 400, message: "bad" }],
+      succeeded: 0, failed: 1, unconfirmed: 0,
+    },
+    {
+      name: "non-2xx code without a success flag",
+      results: [{ code: 409, message: "exists" }],
+      succeeded: 0, failed: 1, unconfirmed: 0,
+    },
+    {
+      name: "non-2xx status without a success flag",
+      results: [{ status: 400, message: "bad" }],
+      succeeded: 0, failed: 1, unconfirmed: 0,
+    },
+    {
+      name: "unconfirmed items",
+      results: [{ primary_email: "unknown@acme.com" }, { message: "accepted" }],
+      succeeded: 0, failed: 0, unconfirmed: 2,
+    },
+    {
+      name: "2xx status without a success flag",
+      results: [{ status: 201 }],
+      succeeded: 1, failed: 0, unconfirmed: 0,
+    },
+    {
+      name: "success flag contradicted by a non-2xx status",
+      results: [{ success: true, status: 500, message: "partial" }],
+      succeeded: 0, failed: 1, unconfirmed: 0,
+    },
+  ];
+  it.each(cases)("$name", async ({ results, submitted = results.length, succeeded, failed, unconfirmed }) => {
+    const original = structuredClone(results);
+    const client = stubClient({
+      [resource]: { create: vi.fn().mockResolvedValue(results) },
+    });
+    const result = asTool(await handleToolCall(
+      client,
+      `proofpoint_essentials_${resource}_create`,
+      {
+        orgDomain: "acme.com",
+        users: Array.from({ length: submitted }, (_, index) => ({ primary_email: `user${index}@acme.com` })),
+        domains: Array.from({ length: submitted }, (_, index) => `domain${index}.acme.com`),
+      }
+    ));
+    expect(result.isError).toBe(failed > 0 ? true : undefined);
+    const text = result.content[0].text;
+    const payload = JSON.parse(failed > 0 ? text.slice(text.indexOf("\n\n") + 2) : text);
+    expect(payload).toEqual({
+      summary: { requested: Math.max(submitted, results.length), returned: results.length, succeeded, failed, unconfirmed },
+      results: failed > 0 ? original.map((item, index) => ({
+        index,
+        outcome: item.success === false || [item.status, item.code].some(
+          (code) => typeof code === "number" && (code < 200 || code >= 300)
+        ) ? "failed" : item.success === true || typeof item.status === "number" || typeof item.code === "number"
+          ? "succeeded" : "unconfirmed",
+        ...(typeof item.status === "number" ? { status: item.status } : {}),
+        ...(typeof item.code === "number" ? { code: item.code } : {}),
+        ...(typeof item.message === "string" ? { message: item.message } : {}),
+      })) : original,
+    });
+    expect(payload.summary.requested).toBe(succeeded + failed + unconfirmed);
+    expect(results).toEqual(original);
+    if (failed > 0) {
+      expect(text).toContain(`${failed} of ${Math.max(submitted, results.length)}`);
+      expect(text).toContain(`${succeeded} succeeded and should not be retried`);
+      if (unconfirmed > 0) expect(text).toContain(`${unconfirmed} unconfirmed`);
+      else expect(text.split("\n\n")[0]).not.toContain("unconfirmed");
+    }
+  });
+  it.each(["message", "error", "detail", "reason", "description", "object error"])(
+    "redacts personal fields and emails from %s",
+    async (field) => {
+      const message = "user jane.doe@acme.com already exists";
+      const item = {
+        success: false, status: 400, code: "ignored",
+        primary_email: "jane.doe@acme.com", email: "private@acme.com",
+        firstname: "JaneSecret", surname: "DoeSecret", lastname: "LastSecret",
+        alias_emails: ["alias@acme.com"], name: "private-domain.acme.com",
+        [field === "object error" ? "error" : field]: field === "object error" ? { message } : message,
+      };
+      const client = stubClient({ [resource]: { create: vi.fn().mockResolvedValue([item]) } });
+      const result = asTool(await handleToolCall(client, `proofpoint_essentials_${resource}_create`, {
+        orgDomain: "acme.com", users: [{ primary_email: "jane.doe@acme.com" }], domains: ["acme.com"],
+      }));
+      expect(result.isError).toBe(true);
+      const text = result.content[0].text;
+      for (const secret of ["jane.doe@acme.com", "JaneSecret", "DoeSecret", "LastSecret", "primary_email", "private-domain.acme.com", "alias@acme.com"]) {
+        expect(text).not.toContain(secret);
+      }
+      expect(JSON.parse(text.slice(text.indexOf("\n\n") + 2)).results).toEqual([
+        { index: 0, outcome: "failed", status: 400, message: "user [redacted-email] already exists" },
+      ]);
+    }
+  );
+
 });
 
 describe("high-impact handlers (warning-only, no runtime gate)", () => {

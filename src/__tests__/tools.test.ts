@@ -36,6 +36,39 @@ describe("TOOLS surface", () => {
     expect(TOOLS).toBe(TOOLS);
   });
 
+  it("users_create advertises Proofpoint user fields and requires primary_email", () => {
+    const tool = TOOLS.find((t) => t.name === "proofpoint_essentials_users_create")!;
+    expect(tool.inputSchema.properties!.users).toMatchObject({
+      type: "array",
+      minItems: 1,
+      items: {
+        type: "object",
+        required: ["primary_email"],
+        additionalProperties: true,
+        properties: {
+          primary_email: { type: "string" },
+          firstname: { type: "string" },
+          surname: { type: "string" },
+        },
+      },
+    });
+    const users = tool.inputSchema.properties!.users as {
+      items: { properties: Record<string, unknown> };
+    };
+    for (const field of [
+      "email", "lastname", "uid", "password", "creation_date", "last_update", "last_login",
+    ]) {
+      expect(users.items.properties).not.toHaveProperty(field);
+    }
+  });
+
+  it("domains_create requires a non-empty string array", () => {
+    const tool = TOOLS.find((t) => t.name === "proofpoint_essentials_domains_create")!;
+    expect(tool.inputSchema.properties!.domains).toMatchObject({
+      type: "array", items: { type: "string" }, minItems: 1,
+    });
+  });
+
   describe("Tier A (irreversible destructive) tools", () => {
     for (const name of DESTRUCTIVE_TIER_A) {
       it(`${name} carries the destructive warning, annotations, and confirm arg`, () => {

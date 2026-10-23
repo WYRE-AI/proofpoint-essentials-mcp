@@ -106,8 +106,10 @@ export const TOOLS: Tool[] = [
   {
     name: "proofpoint_essentials_domains_create",
     description:
-      "Add one or more domains to an organization (batch create). The API may return a " +
-      "207 partial-success response; per-item results are returned verbatim.",
+      "Add one or more domains to an organization. Each name is sent as a Domain object {name}. " +
+      "Returns summary (requested, returned, succeeded, failed, unconfirmed); missing items are unconfirmed. " +
+      "Any failure sets isError and redacts per-item results to index, outcome, numeric status/code, and message. " +
+      "Succeeded items are created and must not be retried.",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,6 +117,7 @@ export const TOOLS: Tool[] = [
         domains: {
           type: "array",
           items: { type: "string" },
+          minItems: 1,
           description: "Domain names to add.",
         },
       },
@@ -184,8 +187,12 @@ export const TOOLS: Tool[] = [
   {
     name: "proofpoint_essentials_users_create",
     description:
-      "Add one or more users to an organization (batch create). The API may return a 207 " +
-      "partial-success response; per-item results are returned verbatim.",
+      "Add one or more users to an organization. Users are sent to Proofpoint as a bare array of " +
+      "User objects (primary_email required). Response-only fields " +
+      "(uid, password, creation_date, last_update, last_login) are ignored on create. " +
+      "Returns summary (requested, returned, succeeded, failed, unconfirmed); missing items are unconfirmed. " +
+      "Any failure sets isError and redacts per-item results to index, outcome, numeric status/code, and message. " +
+      "Succeeded items are created and must not be retried.",
     inputSchema: {
       type: "object",
       properties: {
@@ -194,9 +201,32 @@ export const TOOLS: Tool[] = [
           type: "array",
           items: {
             type: "object",
+            properties: {
+              primary_email: {
+                type: "string",
+                description: "Primary email address (required). Proofpoint field name; not `email`.",
+              },
+              firstname: { type: "string" },
+              surname: {
+                type: "string",
+                description: "Last name (Proofpoint field name; not `lastname`).",
+              },
+              type: {
+                type: "string",
+                enum: [
+                  "end_user", "silent_user", "functional_account", "organization_admin",
+                  "channel_admin", "strategic_partner_admin", "oem_partner_admin",
+                ],
+                description: "Proofpoint user type (account role).",
+              },
+              is_active: { type: "boolean" },
+              send_welcome_email: { type: "boolean" },
+              alias_emails: { type: "array", items: { type: "string" } },
+            },
+            required: ["primary_email"],
             additionalProperties: true,
-            description: "User fields, typically including email, firstname, lastname.",
           },
+          minItems: 1,
           description: "User objects to create.",
         },
       },
