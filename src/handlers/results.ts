@@ -1,4 +1,5 @@
 /** Shared tool-result helpers and argument validation. */
+import { sanitize } from "../utils/sanitize.js";
 import type { BatchItemResult } from "@wyre-ai/node-proofpoint-essentials";
 
 export interface ToolResult {
@@ -25,32 +26,49 @@ export function batchCreateResult(
     unconfirmed: Math.max(0, requested - results.length),
   };
   const redacted = results.map((item, index) => {
-    const codes = [item.status, item.code].filter((value): value is number => typeof value === "number");
+    const record = item !== null && typeof item === "object" ? item : {};
+    const codes = [record.status, record.code].filter((value): value is number => typeof value === "number");
     let outcome: "succeeded" | "failed" | "unconfirmed";
-    if (item.success === false || codes.some((code) => code < 200 || code >= 300)) {
+    const hasError = (value: unknown): boolean =>
+      value !== undefined && value !== null && value !== "" && value !== false &&
+      !(Array.isArray(value) && value.length === 0);
+    if (hasError(record.error) || hasError((record as { errors?: unknown }).errors) || record.success === false || codes.some((code) => code < 200 || code >= 300)) {
       outcome = "failed";
-    } else if (item.success === true || codes.length > 0) {
+    } else if (record.success === true || codes.length > 0) {
       outcome = "succeeded";
     } else {
       outcome = "unconfirmed";
     }
     summary[outcome]++;
-    const error = item.error;
+    const error = record.error;
     const errorMessage = error !== null && typeof error === "object" && "message" in error
       ? error.message : error;
-    const message = [item.message, errorMessage, item.detail, item.reason, item.description]
+    // Proofpoint's documented batch shape reports failures as errors: [{status, error_message}].
+    const rawErrors = (record as { errors?: unknown }).errors;
+    const firstError = (Array.isArray(rawErrors) ? rawErrors : [rawErrors]).find(
+      (entry): entry is Record<string, unknown> => entry !== null && typeof entry === "object"
+    );
+    const firstErrorText = Array.isArray(rawErrors)
+      ? rawErrors.find((entry): entry is string => typeof entry === "string") : undefined;
+    const errorsStatus = typeof firstError?.status === "number" ? firstError.status : undefined;
+    const errorsMessage = [firstError?.error_message, firstError?.message, firstErrorText]
       .find((value): value is string => typeof value === "string");
+    const message = [typeof item === "string" ? item : undefined, errorsMessage, record.message,
+      (record as { error_message?: unknown }).error_message, errorMessage,
+      record.detail, record.reason, record.description]
+      .find((value): value is string => typeof value === "string");
+    const status = typeof record.status === "number" ? record.status : errorsStatus;
     return {
       index,
       outcome,
-      ...(typeof item.status === "number" ? { status: item.status } : {}),
-      ...(typeof item.code === "number" ? { code: item.code } : {}),
+      ...(status !== undefined ? { status } : {}),
+      ...(typeof record.code === "number" ? { code: record.code } : {}),
       ...(message !== undefined ? {
-        message: message.replace(/[^\s<>"(),;:@]+@[^\s<>"(),;:@]+/g, "[redacted-email]").slice(0, 300),
+        message: sanitize(message, { redactHostnames: kind === "domain" }),
       } : {}),
     };
   });
-  const result = jsonResult({ summary, results: summary.failed > 0 ? redacted : results });
+  const result = jsonResult({ summary, results: summary.succeeded === results.length && summary.unconfirmed === 0 ? results : redacted });
   if (summary.failed > 0) {
     result.isError = true;
     result.content[0].text =

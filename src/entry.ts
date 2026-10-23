@@ -9,8 +9,10 @@ if (!process.env.MCP_TRANSPORT || process.env.MCP_TRANSPORT === "stdio") {
     );
   };
 }
+import { sanitize } from "./utils/sanitize.js";
+
 // Dynamic import ensures the guard is active before module resolution.
 import("./index.js").catch((err) => {
-  console.error("Failed to start server:", err);
+  console.error(sanitize(`Failed to start server: ${err instanceof Error ? err.message : String(err)}`));
   process.exit(1);
 });

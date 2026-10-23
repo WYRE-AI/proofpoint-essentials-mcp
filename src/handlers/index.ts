@@ -5,6 +5,7 @@
  */
 import type { InputRequiredResult } from "@modelcontextprotocol/server";
 import { ServiceError, type ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
+import { sanitize } from "../utils/sanitize.js";
 import { NO_ELICITATION, type ElicitationContext } from "../elicitation.js";
 import { deleteDomain, createDomains, listDomains, updateDomain } from "./domains.js";
 import {
@@ -50,16 +51,18 @@ const HANDLERS: Record<string, ToolHandler> = {
   proofpoint_essentials_token_create: (client, args) => createToken(client, args),
 };
 
-function describeServiceError(error: ServiceError): string {
-  let body = "";
-  if (error.response !== undefined && error.response !== null && error.response !== "") {
-    try {
-      body = ` Response: ${JSON.stringify(error.response)}`;
-    } catch {
-      body = "";
-    }
-  }
-  return `Proofpoint Essentials error (HTTP ${error.statusCode}): ${error.message}.${body}`;
+function describeServiceError(error: ServiceError, redactHostnames: boolean): string {
+  const response = error.response;
+  const code = response !== null && typeof response === "object" && "code" in response
+    ? response.code : undefined;
+  const metadata = {
+    statusCode: error.statusCode,
+    ...(typeof code === "string" || typeof code === "number" ? { code } : {}),
+  };
+  return sanitize(
+    `Proofpoint Essentials error (HTTP ${error.statusCode}): ${sanitize(error.message, { redactHostnames })}. Response: ${JSON.stringify(metadata)}`,
+    { redactHostnames }
+  );
 }
 
 export async function handleToolCall(
@@ -68,20 +71,29 @@ export async function handleToolCall(
   args: Record<string, unknown>,
   elicitation: ElicitationContext = NO_ELICITATION
 ): Promise<ToolResult | InputRequiredResult> {
+  const redactHostnames = name.startsWith("proofpoint_essentials_domains_");
   const handler = HANDLERS[name];
   if (!handler) {
-    return errorResult(`Unknown tool: ${name}`);
+    return errorResult(sanitize(`Unknown tool: ${name}`, { redactHostnames }));
   }
   try {
-    return await handler(client, args, elicitation);
+    const result = await handler(client, args, elicitation);
+    // Batch helpers sanitize each message; preserve their structured JSON and counts.
+    const isBatchCreate = name === "proofpoint_essentials_users_create" ||
+      name === "proofpoint_essentials_domains_create";
+    if ("isError" in result && result.isError === true && !isBatchCreate) {
+      return { ...result, content: (result as ToolResult).content.map((part) => part.type === "text"
+        ? { ...part, text: sanitize(part.text, { redactHostnames }) } : part) };
+    }
+    return result;
   } catch (error) {
     if (error instanceof ToolInputError) {
-      return errorResult(`Invalid arguments for ${name}: ${error.message}`);
+      return errorResult(sanitize(`Invalid arguments for ${name}: ${error.message}`, { redactHostnames }));
     }
     if (error instanceof ServiceError) {
-      return errorResult(describeServiceError(error));
+      return errorResult(describeServiceError(error, redactHostnames));
     }
     const message = error instanceof Error ? error.message : String(error);
-    return errorResult(`Error calling ${name}: ${message}`);
+    return errorResult(sanitize(`Error calling ${name}: ${message}`, { redactHostnames }));
   }
 }

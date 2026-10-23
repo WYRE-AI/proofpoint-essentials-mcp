@@ -240,8 +240,8 @@ export function confirmDestructive(
       kind: "blocked",
       message:
         "Confirmation required, but this client cannot be prompted for it (it declared " +
-        `no elicitation capability). Nothing was changed. Pending action: ${message} ` +
-        `To proceed, re-invoke this tool with "${CONFIRM_ARG}": true.`,
+        `no elicitation capability). Nothing was changed. ` +
+        `To proceed, re-invoke this tool with "${CONFIRM_ARG}": true. Pending action: ${message}`,
     };
   }
   return isRefusal(outcome) ? { kind: "refused" } : { kind: "proceed" };
