@@ -30,6 +30,19 @@ describe("sanitize", () => {
   });
 });
 
+describe("sanitize input bounds", () => {
+  it.each([
+    ["a long run with no @", "a".repeat(200_000)],
+    ["an unterminated quote run", '"'.repeat(50_000)],
+    ["a long hostname-like run", "a.".repeat(100_000)],
+  ])("stays fast on %s", (_label, input) => {
+    const started = performance.now();
+    const result = sanitize(input, { redactHostnames: true });
+    expect(performance.now() - started).toBeLessThan(500);
+    expect(Array.from(result).length).toBeLessThanOrEqual(300);
+  });
+});
+
 describe("error boundaries", () => {
   const body = { code: 42, message: "bob@x.com exists", private: "RAW_BODY_SECRET" };
   it.each([
@@ -57,6 +70,17 @@ describe("error boundaries", () => {
       expect(result.content[0].text).not.toMatch(/example|bob@/);
     }
   );
+  it("surfaces status and sanitized message from a documented errors array", () => {
+    const result = batchCreateResult("user", [
+      { errors: [{ status: 409, error_message: "bob@x.com already exists" }] },
+    ] as unknown as BatchItemResult[], 1);
+    const text = result.content[0].text;
+    const payload = JSON.parse(text.slice(text.indexOf("\n\n") + 2));
+    expect(result.isError).toBe(true);
+    expect(payload.results[0]).toEqual({
+      index: 0, outcome: "failed", status: 409, message: "[redacted-email] already exists",
+    });
+  });
   it.each([
     { success: true, status: 201, error: null },
     { success: true, status: 201, errors: [] },

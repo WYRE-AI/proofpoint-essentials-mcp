@@ -43,12 +43,25 @@ export function batchCreateResult(
     const error = record.error;
     const errorMessage = error !== null && typeof error === "object" && "message" in error
       ? error.message : error;
-    const message = [typeof item === "string" ? item : undefined, record.message, errorMessage, record.detail, record.reason, record.description]
+    // Proofpoint's documented batch shape reports failures as errors: [{status, error_message}].
+    const rawErrors = (record as { errors?: unknown }).errors;
+    const firstError = (Array.isArray(rawErrors) ? rawErrors : [rawErrors]).find(
+      (entry): entry is Record<string, unknown> => entry !== null && typeof entry === "object"
+    );
+    const firstErrorText = Array.isArray(rawErrors)
+      ? rawErrors.find((entry): entry is string => typeof entry === "string") : undefined;
+    const errorsStatus = typeof firstError?.status === "number" ? firstError.status : undefined;
+    const errorsMessage = [firstError?.error_message, firstError?.message, firstErrorText]
       .find((value): value is string => typeof value === "string");
+    const message = [typeof item === "string" ? item : undefined, record.message,
+      (record as { error_message?: unknown }).error_message, errorMessage, errorsMessage,
+      record.detail, record.reason, record.description]
+      .find((value): value is string => typeof value === "string");
+    const status = typeof record.status === "number" ? record.status : errorsStatus;
     return {
       index,
       outcome,
-      ...(typeof record.status === "number" ? { status: record.status } : {}),
+      ...(status !== undefined ? { status } : {}),
       ...(typeof record.code === "number" ? { code: record.code } : {}),
       ...(message !== undefined ? {
         message: sanitize(message, { redactHostnames: kind === "domain" }),
