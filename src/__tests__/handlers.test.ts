@@ -174,11 +174,33 @@ describe("write handlers (non-destructive)", () => {
 
   it("proofpoint_essentials_users_create passes through the users array", async () => {
     const client = stubClient();
+    const users = [{ primary_email: "jdoe@example.com", firstname: "Jane", surname: "Doe" }];
     await handleToolCall(client, "proofpoint_essentials_users_create", {
       orgDomain: "acme.com",
-      users: [{ email: "new@acme.com" }],
+      users,
     });
-    expect(client.users.create).toHaveBeenCalledWith("acme.com", [{ email: "new@acme.com" }]);
+    expect(client.users.create).toHaveBeenCalledWith("acme.com", users);
+    expect(vi.mocked(client.users.create).mock.calls[0][1]).toBe(users);
+  });
+
+  it.each([
+    [{ email: "jdoe@example.com" }, "primary_email"],
+    [{ email: "jdoe@example.com", lastname: "Doe" }, "surname"],
+    [{ primary_email: "" }, "primary_email"],
+    [{ primary_email: "   " }, "primary_email"],
+    [{ primary_email: 123 }, "primary_email"],
+  ])("rejects invalid user input %j before calling the SDK", async (user, hint) => {
+    const client = stubClient();
+    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_create", {
+      orgDomain: "acme.com",
+      users: [{ primary_email: "valid@acme.com" }, user],
+    }));
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("users[1].primary_email");
+    expect(result.content[0].text).toContain(hint);
+    if ("email" in user) expect(result.content[0].text).toContain('Use "primary_email" instead of "email"');
+    if ("lastname" in user) expect(result.content[0].text).toContain('Use "surname" instead of "lastname"');
+    expect(client.users.create).not.toHaveBeenCalled();
   });
 
   it("proofpoint_essentials_token_create passes an optional body through", async () => {

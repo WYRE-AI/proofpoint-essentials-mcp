@@ -161,16 +161,18 @@ not scoped to a single org).
 
 ### Domains
 - `proofpoint_essentials_domains_list`
-- `proofpoint_essentials_domains_create` — batch add
+- `proofpoint_essentials_domains_create` — params: `orgDomain`, non-empty `domains: string[]`. Each name is sent as a Domain object `{name}`; results are a per-item array.
 - `proofpoint_essentials_domains_update` ⚠ high-impact
 - `proofpoint_essentials_domains_delete` ⚠ destructive, irreversible
 
 ### Users
 - `proofpoint_essentials_users_list`
 - `proofpoint_essentials_users_get`
-- `proofpoint_essentials_users_create` — batch add
+- `proofpoint_essentials_users_create` — params: `orgDomain`, non-empty `users[]` with required `primary_email` and optional `firstname`, `surname`, `type`, `is_active`, `send_welcome_email`, `alias_emails`. A single user returns 201; several return a 207 batch response, normalized to a per-item array.
 - `proofpoint_essentials_users_update` ⚠ high-impact
 - `proofpoint_essentials_users_delete` ⚠ destructive, irreversible
+
+The create serialization and result normalization fix requires an SDK version >= the release containing [node-proofpoint-essentials#3](https://github.com/WYRE-AI/node-proofpoint-essentials/pull/3).
 
 ### Endpoint discovery
 - `proofpoint_essentials_endpoint_discover` — resolve which region hosts a customer domain

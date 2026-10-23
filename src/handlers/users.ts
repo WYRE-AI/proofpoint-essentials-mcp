@@ -37,7 +37,22 @@ export async function createUsers(
 ): Promise<ToolResult> {
   const orgDomain = requireString(args, "orgDomain");
   const users = requireObjectArray(args, "users");
-  const result = await client.users.create(orgDomain, users);
+  for (const [index, user] of users.entries()) {
+    if (typeof user.primary_email !== "string" || user.primary_email.trim() === "") {
+      const hints = [
+        "email" in user ? 'Use "primary_email" instead of "email".' : "",
+        "lastname" in user ? 'Use "surname" instead of "lastname".' : "",
+      ].filter(Boolean).join(" ");
+      return errorResult(
+        `users[${index}].primary_email is required and must be a non-empty string.${hints ? ` ${hints}` : ""}`
+      );
+    }
+  }
+  // Keep the original array; the SDK owns request serialization.
+  const result = await client.users.create(
+    orgDomain,
+    users as Parameters<typeof client.users.create>[1]
+  );
   return jsonResult(result);
 }
 

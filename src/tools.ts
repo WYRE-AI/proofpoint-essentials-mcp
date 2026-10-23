@@ -106,8 +106,8 @@ export const TOOLS: Tool[] = [
   {
     name: "proofpoint_essentials_domains_create",
     description:
-      "Add one or more domains to an organization (batch create). The API may return a " +
-      "207 partial-success response; per-item results are returned verbatim.",
+      "Add one or more domains to an organization. Each name is sent as a Domain object {name}. " +
+      "Results are returned as a per-item array, including 207 partial-success responses.",
     inputSchema: {
       type: "object",
       properties: {
@@ -115,6 +115,7 @@ export const TOOLS: Tool[] = [
         domains: {
           type: "array",
           items: { type: "string" },
+          minItems: 1,
           description: "Domain names to add.",
         },
       },
@@ -184,8 +185,8 @@ export const TOOLS: Tool[] = [
   {
     name: "proofpoint_essentials_users_create",
     description:
-      "Add one or more users to an organization (batch create). The API may return a 207 " +
-      "partial-success response; per-item results are returned verbatim.",
+      "Add users to an organization: a single user returns 201; several users return a 207 " +
+      "batch response. Results are returned as a per-item array.",
     inputSchema: {
       type: "object",
       properties: {
@@ -194,9 +195,32 @@ export const TOOLS: Tool[] = [
           type: "array",
           items: {
             type: "object",
+            properties: {
+              primary_email: {
+                type: "string",
+                description: "Primary email address (required). Proofpoint field name; not `email`.",
+              },
+              firstname: { type: "string" },
+              surname: {
+                type: "string",
+                description: "Last name (Proofpoint field name; not `lastname`).",
+              },
+              type: {
+                type: "string",
+                enum: [
+                  "end_user", "silent_user", "functional_account", "organization_admin",
+                  "channel_admin", "strategic_partner_admin", "oem_partner_admin",
+                ],
+                description: "Proofpoint user type (account role).",
+              },
+              is_active: { type: "boolean" },
+              send_welcome_email: { type: "boolean" },
+              alias_emails: { type: "array", items: { type: "string" } },
+            },
+            required: ["primary_email"],
             additionalProperties: true,
-            description: "User fields, typically including email, firstname, lastname.",
           },
+          minItems: 1,
           description: "User objects to create.",
         },
       },
