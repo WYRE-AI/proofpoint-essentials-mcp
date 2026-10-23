@@ -185,8 +185,9 @@ export const TOOLS: Tool[] = [
   {
     name: "proofpoint_essentials_users_create",
     description:
-      "Add users to an organization: a single user returns 201; several users return a 207 " +
-      "batch response. Results are returned as a per-item array.",
+      "Add one or more users to an organization. Users are sent to Proofpoint as a bare array of " +
+      "User objects (primary_email required); results are returned as a per-item array, including " +
+      "207 partial-success responses.",
     inputSchema: {
       type: "object",
       properties: {

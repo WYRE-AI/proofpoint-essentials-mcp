@@ -168,7 +168,7 @@ not scoped to a single org).
 ### Users
 - `proofpoint_essentials_users_list`
 - `proofpoint_essentials_users_get`
-- `proofpoint_essentials_users_create` — params: `orgDomain`, non-empty `users[]` with required `primary_email` and optional `firstname`, `surname`, `type`, `is_active`, `send_welcome_email`, `alias_emails`. A single user returns 201; several return a 207 batch response, normalized to a per-item array.
+- `proofpoint_essentials_users_create` — params: `orgDomain`, non-empty `users[]` with required `primary_email` and optional `firstname`, `surname`, `type`, `is_active`, `send_welcome_email`, `alias_emails`. Users are sent to Proofpoint as a bare array of User objects; results are returned as a per-item array, including 207 partial-success responses.
 - `proofpoint_essentials_users_update` ⚠ high-impact
 - `proofpoint_essentials_users_delete` ⚠ destructive, irreversible
 
