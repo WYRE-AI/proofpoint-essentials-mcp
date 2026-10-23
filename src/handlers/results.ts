@@ -53,8 +53,8 @@ export function batchCreateResult(
     const errorsStatus = typeof firstError?.status === "number" ? firstError.status : undefined;
     const errorsMessage = [firstError?.error_message, firstError?.message, firstErrorText]
       .find((value): value is string => typeof value === "string");
-    const message = [typeof item === "string" ? item : undefined, record.message,
-      (record as { error_message?: unknown }).error_message, errorMessage, errorsMessage,
+    const message = [typeof item === "string" ? item : undefined, errorsMessage, record.message,
+      (record as { error_message?: unknown }).error_message, errorMessage,
       record.detail, record.reason, record.description]
       .find((value): value is string => typeof value === "string");
     const status = typeof record.status === "number" ? record.status : errorsStatus;

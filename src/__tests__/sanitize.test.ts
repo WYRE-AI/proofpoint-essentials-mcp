@@ -81,6 +81,17 @@ describe("error boundaries", () => {
       index: 0, outcome: "failed", status: 409, message: "[redacted-email] already exists",
     });
   });
+  it("prefers a sanitized errors array message over a top-level message", () => {
+    const result = batchCreateResult("user", [
+      { message: "Request failed", errors: [{ status: 409, error_message: "bob@x.com already exists" }] },
+    ] as unknown as BatchItemResult[], 1);
+    const text = result.content[0].text;
+    const payload = JSON.parse(text.slice(text.indexOf("\n\n") + 2));
+    expect(result.isError).toBe(true);
+    expect(payload.results[0]).toEqual({
+      index: 0, outcome: "failed", status: 409, message: "[redacted-email] already exists",
+    });
+  });
   it.each([
     { success: true, status: 201, error: null },
     { success: true, status: 201, errors: [] },
