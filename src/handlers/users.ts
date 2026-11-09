@@ -74,11 +74,16 @@ export async function updateUser(
     if (typeof existing.type !== "string" || existing.type.trim() === "") {
       return errorResult("Update refused: existing account type/role could not be read reliably; refusing to risk resetting the account to End User.");
     }
+    // PUT replaces the record, so retain every writable field from GET.
+    const preserved = { ...existing };
+    for (const field of ["uid", "creation_date", "last_update", "last_login", "password"]) {
+      delete preserved[field];
+    }
     body = {
-      ...(typeof existing.primary_email === "string" ? { primary_email: existing.primary_email } : {}),
-      ...(existing.role !== undefined ? { role: existing.role } : {}),
+      ...preserved,
       ...data,
       type: existing.type,
+      ...(existing.role !== undefined && !supplied("role") ? { role: existing.role } : {}),
     };
   }
   const result = await client.users.update(orgDomain, email, body);

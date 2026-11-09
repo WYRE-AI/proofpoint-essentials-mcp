@@ -516,14 +516,25 @@ describe("safe sender lists", () => {
 });
 
 describe("user update account type preservation", () => {
-  const args = { orgDomain: "example.com", email: "user@example.com", data: { firstname: "Example" } };
-  it("preserves type, role and primary email without response-only fields", async () => {
-    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type: "organization_admin", role: "admin", primary_email: "user@example.com", uid: 1, password: "secret" }) } });
+  const args = { orgDomain: "example.com", email: "user@example.com", data: { surname: "Updated" } };
+  it("merges all existing fields with changes without response-only fields", async () => {
+    const existing = {
+      type: "organization_admin", role: "admin", primary_email: "user@example.com",
+      firstname: "Example", surname: "Original", is_active: false,
+      uid: 1, password: "secret", creation_date: "2025-01-01",
+      last_update: "2025-02-01", last_login: "2025-03-01",
+    };
+    const client = stubClient({ users: { get: vi.fn().mockResolvedValue(existing) } });
     expect(asTool(await handleToolCall(client, "proofpoint_essentials_users_update", args)).isError).toBeUndefined();
-    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", { ...args.data, type: "organization_admin", role: "admin", primary_email: "user@example.com" });
+    expect(client.users.get).toHaveBeenCalledWith("example.com", "user@example.com");
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
+      type: "organization_admin", role: "admin", primary_email: "user@example.com",
+      firstname: "Example", surname: "Updated", is_active: false,
+    });
+    expect(existing).toMatchObject({ uid: 1, password: "secret", surname: "Original" });
   });
-  it("fails closed when type/role cannot be read", async () => {
-    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({}) } });
+  it.each([undefined, null, "", "   ", 123])("fails closed when existing type is %j", async (type) => {
+    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type, role: "admin" }) } });
     const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_update", args));
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("End User");
