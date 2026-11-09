@@ -60,6 +60,7 @@ export async function createUsers(
   return batchCreateResult("user", results, inputs.length);
 }
 
+/** Update a user, preserving GET fields when account type and role are omitted. */
 export async function updateUser(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>

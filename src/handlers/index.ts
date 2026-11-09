@@ -72,6 +72,7 @@ function describeServiceError(error: ServiceError, redactHostnames: boolean): st
   );
 }
 
+/** Dispatch a tool call and sanitize handler results and errors. */
 export async function handleToolCall(
   client: ProofpointEssentialsClient,
   name: string,

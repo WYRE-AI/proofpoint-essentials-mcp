@@ -3,6 +3,7 @@ import { isIPv4 } from "node:net";
 import type { ProofpointEssentialsClient, SenderLists } from "@wyre-ai/node-proofpoint-essentials";
 import { jsonResult, requireString, requireStringArray, ToolInputError, type ToolResult } from "./results.js";
 
+/** Validate supported sender entries without whitespace or injection characters. */
 function validEntry(entry: string): boolean {
   if (!entry || /[\s<>"']/.test(entry) || [...entry].some(char => {
     const code = char.charCodeAt(0);
@@ -19,6 +20,7 @@ function validEntry(entry: string): boolean {
     (prefix === undefined || /^(?:[0-9]|[12][0-9]|3[0-2])$/.test(prefix));
 }
 
+/** Validate and copy both lists before modifying the dedicated resource. */
 function snapshot(lists: SenderLists): Required<SenderLists> {
   for (const key of ["allow_list", "block_list"] as const) {
     if (lists[key] !== undefined && (!Array.isArray(lists[key]) || !lists[key]!.every(v => typeof v === "string"))) {
@@ -28,6 +30,7 @@ function snapshot(lists: SenderLists): Required<SenderLists> {
   return { allow_list: [...(lists.allow_list ?? [])], block_list: [...(lists.block_list ?? [])] };
 }
 
+/** GET-merge-PATCH sender entries, removing opposite-list matches on add. */
 export async function changeSenderList(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>,

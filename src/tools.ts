@@ -52,10 +52,11 @@ const domainProp = {
 
 const orgDomainProp = { ...domainProp, description: "The target organization's primary domain." };
 
+/** Build a dedicated sender-list tool with explicit mutation hints. */
 function senderListTool(scope: "users" | "orgs", action: "add" | "remove"): Tool {
   return {
     name: `proofpoint_essentials_${scope}_sender_list_${action}`,
-    description: `SAFE path to ${action} allow/block sender entries. Only touches sender lists via /sender-lists; never changes account type/role. Do NOT use users_update for sender lists.`,
+    description: `SAFE path to ${action} allow/block sender entries. Only touches /sender-lists; never PUTs the whole user or changes account type/role. ${action === "add" ? "Adding entries also removes matching entries from the opposite list. " : ""}Do NOT use users_update for sender lists.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -67,7 +68,7 @@ function senderListTool(scope: "users" | "orgs", action: "add" | "remove"): Tool
       },
       required: ["orgDomain", ...(scope === "users" ? ["email"] : []), "list", "entries"],
     },
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true },
   };
 }
 
