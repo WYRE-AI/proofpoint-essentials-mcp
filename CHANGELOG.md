@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Safe user/org sender-list add and remove tools via dedicated `/sender-lists` endpoints (`proofpoint_essentials_users_sender_list_add`/`_remove`, `proofpoint_essentials_orgs_sender_list_add`/`_remove`). GET→merge→PATCH; never PUT the whole user for list changes.
+- Depends on `@wyre-ai/node-proofpoint-essentials` ^1.1.0 for `client.senderLists`.
+
+### Fixed
+- `proofpoint_essentials_users_update` now full GET-merges (preserving `type`/`role` and other fields) when `type`/`role` are omitted, and fails closed if GET lacks `type`, to avoid resetting accounts to End User.
+
 ### Fixed
 - Share email redaction and Unicode-safe error limits across error boundaries; redact
   domain-tool hostnames and reduce vendor errors to status/code metadata.
