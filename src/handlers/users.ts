@@ -67,7 +67,21 @@ export async function updateUser(
   const orgDomain = requireString(args, "orgDomain");
   const email = requireString(args, "email");
   const data = requireObject(args, "data");
-  const result = await client.users.update(orgDomain, email, data);
+  let body = { ...data };
+  const supplied = (field: string) => Object.hasOwn(data, field) && data[field] !== undefined;
+  if (!supplied("type") && !supplied("role")) {
+    const existing = await client.users.get(orgDomain, email);
+    if (typeof existing.type !== "string" || existing.type.trim() === "") {
+      return errorResult("Update refused: existing account type/role could not be read reliably; refusing to risk resetting the account to End User.");
+    }
+    body = {
+      ...(typeof existing.primary_email === "string" ? { primary_email: existing.primary_email } : {}),
+      ...(existing.role !== undefined ? { role: existing.role } : {}),
+      ...data,
+      type: existing.type,
+    };
+  }
+  const result = await client.users.update(orgDomain, email, body);
   return jsonResult(result);
 }
 

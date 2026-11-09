@@ -1,5 +1,5 @@
 /**
- * The complete Proofpoint Essentials tool surface — 20 tools, FLAT (no router).
+ * The complete Proofpoint Essentials tool surface — 24 tools, FLAT (no router).
  *
  * Deterministic ordering rule: all tools live in this single module-scope
  * `TOOLS` array, grouped by resource (orgs, domains, users, endpoints,
@@ -52,6 +52,25 @@ const domainProp = {
 
 const orgDomainProp = { ...domainProp, description: "The target organization's primary domain." };
 
+function senderListTool(scope: "users" | "orgs", action: "add" | "remove"): Tool {
+  return {
+    name: `proofpoint_essentials_${scope}_sender_list_${action}`,
+    description: `SAFE path to ${action} allow/block sender entries. Only touches sender lists via /sender-lists; never changes account type/role. Do NOT use users_update for sender lists.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgDomain: orgDomainProp,
+        ...(scope === "users" ? { email: { type: "string", description: "User primary email." } } : {}),
+        list: { type: "string", enum: ["allow", "block"] },
+        entries: { type: "array", minItems: 1, items: { type: "string", minLength: 1 },
+          description: "Emails, domains, IPv4 addresses, CIDRs, or Proofpoint wildcards (e.g. *@example.com, 10.91.*.*)." },
+      },
+      required: ["orgDomain", ...(scope === "users" ? ["email"] : []), "list", "entries"],
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
+  };
+}
+
 export const TOOLS: Tool[] = [
   // ── Organizations ──────────────────────────────────────────────────────
   {
@@ -91,6 +110,9 @@ export const TOOLS: Tool[] = [
     },
     annotations: DESTRUCTIVE_ANNOTATIONS,
   },
+
+  senderListTool("orgs", "add"),
+  senderListTool("orgs", "remove"),
 
   // ── Domains ─────────────────────────────────────────────────────────────
   {
@@ -236,7 +258,7 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "proofpoint_essentials_users_update",
-    description: "⚠ HIGH-IMPACT. Update a user's details. Confirm with the user before invoking.",
+    description: "⚠ HIGH-IMPACT. Update a user's details. WARNING: omitting type used to reset accounts to End User. Now read-merges type from GET when type/role are omitted and refuses updates if type cannot be read. Prefer the SAFE sender-list tools for allow/block changes. Confirm with the user before invoking.",
     inputSchema: {
       type: "object",
       properties: {
@@ -268,6 +290,9 @@ export const TOOLS: Tool[] = [
     },
     annotations: DESTRUCTIVE_ANNOTATIONS,
   },
+
+  senderListTool("users", "add"),
+  senderListTool("users", "remove"),
 
   // ── Endpoint discovery ──────────────────────────────────────────────────
   {

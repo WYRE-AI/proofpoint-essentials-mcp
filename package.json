@@ -45,7 +45,7 @@
   "dependencies": {
     "@modelcontextprotocol/node": "^2.0.0-beta.5",
     "@modelcontextprotocol/server": "^2.0.0-beta.5",
-    "@wyre-ai/node-proofpoint-essentials": "^1.0.2"
+    "@wyre-ai/node-proofpoint-essentials": "file:/workspace/pp720-work/wyre-ai-node-proofpoint-essentials-1.0.0.tgz"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
@@ -63,5 +63,6 @@
   },
   "engines": {
     "node": ">=20.0.0"
-  }
+  },
+  "_comment": "Release will pin @wyre-ai/node-proofpoint-essentials to ^1.1.0 after the node package publishes; use the local tarball until then."
 }

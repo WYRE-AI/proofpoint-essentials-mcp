@@ -460,3 +460,79 @@ describe("delete confirmations (MRTR-safe: reads first, DELETE last)", () => {
     expect(client.domains.delete).toHaveBeenCalledWith("acme.com", "sub.acme.com");
   });
 });
+
+describe("safe sender lists", () => {
+  for (const scope of ["users", "orgs"] as const) {
+    const args = { orgDomain: "example.com", ...(scope === "users" ? { email: "user@example.com" } : {}), list: "allow", entries: ["NEW@example.com"] };
+    const get = scope === "users" ? "getUser" : "getOrg";
+    const update = scope === "users" ? "updateUser" : "updateOrg";
+    const prefix = scope === "users" ? ["example.com", "user@example.com"] : ["example.com"];
+    function fixture(allow_list: string[] = [], block_list: string[] = []) {
+      return stubClient({ senderLists: {
+        [get]: vi.fn().mockResolvedValue({ allow_list, block_list }),
+        [update]: vi.fn().mockResolvedValue(undefined),
+      } });
+    }
+    async function call(client: ProofpointEssentialsClient, action: string, overrides = {}) {
+      return asTool(await handleToolCall(client, `proofpoint_essentials_${scope}_sender_list_${action}`, { ...args, ...overrides }));
+    }
+    it(`${scope}: merges and preserves the other list verbatim`, async () => {
+      const client = fixture(["old@example.com"], ["BLOCK.example.com"]);
+      const result = await call(client, "add");
+      expect(client.senderLists[update]).toHaveBeenCalledWith(...prefix, { allow_list: ["old@example.com", "NEW@example.com"], block_list: ["BLOCK.example.com"] }, "PATCH");
+      expect(JSON.parse(result.content[0].text)).toMatchObject({ added: ["NEW@example.com"], before: { allow_list: ["old@example.com"] } });
+      expect(client.users.update).not.toHaveBeenCalled();
+      expect(client.orgs.delete).not.toHaveBeenCalled();
+    });
+    it(`${scope}: is case-insensitively idempotent and moves opposite entries`, async () => {
+      const client = fixture(["new@example.com"], ["NEW@example.com", "keep.example.com"]);
+      const result = await call(client, "add");
+      expect(JSON.parse(result.content[0].text)).toMatchObject({ added: [], skipped_already_present: ["NEW@example.com"], after: { allow_list: ["new@example.com"], block_list: ["keep.example.com"] } });
+    });
+    it(`${scope}: moves a newly added entry off the opposite list`, async () => {
+      const result = await call(fixture([], ["new@example.com"]), "add");
+      expect(JSON.parse(result.content[0].text)).toMatchObject({ added: ["NEW@example.com"], after: { allow_list: ["NEW@example.com"], block_list: [] } });
+    });
+    it(`${scope}: removes case-insensitively and reports missing entries`, async () => {
+      const result = await call(fixture(["new@example.com"], ["keep.example.com"]), "remove", { entries: ["NEW@example.com", "missing.example.com"] });
+      expect(JSON.parse(result.content[0].text)).toMatchObject({ removed: ["NEW@example.com"], skipped_not_present: ["missing.example.com"], after: { allow_list: [], block_list: ["keep.example.com"] } });
+    });
+    it(`${scope}: handles block lists, missing lists, wildcards and CIDRs`, async () => {
+      const client = fixture();
+      vi.mocked(client.senderLists[get]).mockResolvedValue({});
+      const entries = ["*@example.com", "10.91.*.*", "192.0.2.1", "192.0.2.0/24", "local@domain", "bad.example.com"];
+      const result = await call(client, "add", { list: "block", entries });
+      expect(JSON.parse(result.content[0].text)).toMatchObject({ after: { allow_list: [], block_list: entries } });
+    });
+    for (const entries of [[], [""], [" "], ["bad\n.example.com"], ['<bad>'], ['a"@example.com'], ["a'@example.com"], ["not a domain"], ["999.999.999.999"], ["192.0.2.0/33"], [123]]) {
+      it(`${scope}: rejects ${JSON.stringify(entries)} before calling the client`, async () => {
+        const client = fixture();
+        expect((await call(client, "add", { entries })).isError).toBe(true);
+        expect(client.senderLists[get]).not.toHaveBeenCalled();
+        expect(client.senderLists[update]).not.toHaveBeenCalled();
+      });
+    }
+  }
+});
+
+describe("user update account type preservation", () => {
+  const args = { orgDomain: "example.com", email: "user@example.com", data: { firstname: "Example" } };
+  it("preserves type, role and primary email without response-only fields", async () => {
+    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type: "organization_admin", role: "admin", primary_email: "user@example.com", uid: 1, password: "secret" }) } });
+    expect(asTool(await handleToolCall(client, "proofpoint_essentials_users_update", args)).isError).toBeUndefined();
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", { ...args.data, type: "organization_admin", role: "admin", primary_email: "user@example.com" });
+  });
+  it("fails closed when type/role cannot be read", async () => {
+    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({}) } });
+    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_update", args));
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("End User");
+    expect(client.users.update).not.toHaveBeenCalled();
+  });
+  it("allows an explicit account type without a GET", async () => {
+    const client = stubClient();
+    await handleToolCall(client, "proofpoint_essentials_users_update", { ...args, data: { type: "organization_admin" } });
+    expect(client.users.get).not.toHaveBeenCalled();
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", { type: "organization_admin" });
+  });
+});

@@ -22,6 +22,8 @@ import { deleteOrg, getOrg, setOrgActive } from "./orgs.js";
 import { createUsers, deleteUser, getUser, listUsers, updateUser } from "./users.js";
 import { errorResult, ToolInputError, type ToolResult } from "./results.js";
 
+import { changeSenderList } from "./sender-lists.js";
+
 type ToolHandler = (
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>,
@@ -29,6 +31,11 @@ type ToolHandler = (
 ) => Promise<ToolResult | InputRequiredResult>;
 
 const HANDLERS: Record<string, ToolHandler> = {
+  proofpoint_essentials_users_sender_list_add: (client, args) => changeSenderList(client, args, "user", "add"),
+  proofpoint_essentials_users_sender_list_remove: (client, args) => changeSenderList(client, args, "user", "remove"),
+  proofpoint_essentials_orgs_sender_list_add: (client, args) => changeSenderList(client, args, "org", "add"),
+  proofpoint_essentials_orgs_sender_list_remove: (client, args) => changeSenderList(client, args, "org", "remove"),
+
   proofpoint_essentials_org_get: (client, args) => getOrg(client, args),
   proofpoint_essentials_org_set_active: (client, args) => setOrgActive(client, args),
   proofpoint_essentials_org_delete: deleteOrg,

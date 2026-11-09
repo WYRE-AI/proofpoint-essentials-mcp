@@ -18,8 +18,8 @@ const HIGH_IMPACT_TIER_B = [
 ];
 
 describe("TOOLS surface", () => {
-  it("has 20 tools", () => {
-    expect(TOOLS.length).toBe(20);
+  it("has 24 tools", () => {
+    expect(TOOLS.length).toBe(24);
   });
 
   it("has unique tool names", () => {
@@ -127,3 +127,16 @@ describe("TOOLS surface", () => {
     });
   });
 });
+
+for (const scope of ["users", "orgs"]) {
+  for (const action of ["add", "remove"]) {
+    it(`${scope} sender-list ${action} is safe and idempotent`, () => {
+      const name = `proofpoint_essentials_${scope}_sender_list_${action}`;
+      const tool = TOOLS.find(t => t.name === name)!;
+      expect(TOOL_NAMES).toContain(name);
+      expect(tool.annotations).toEqual({ readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true });
+      const anchor = scope === "users" ? "proofpoint_essentials_users_delete" : "proofpoint_essentials_org_delete";
+      expect(TOOL_NAMES.indexOf(name)).toBe(TOOL_NAMES.indexOf(anchor) + (action === "add" ? 1 : 2));
+    });
+  }
+}

@@ -158,6 +158,8 @@ not scoped to a single org).
 - `proofpoint_essentials_org_get` — get org data and its domains
 - `proofpoint_essentials_org_set_active` — activate/deactivate an org ⚠ high-impact
 - `proofpoint_essentials_org_delete` — delete an org ⚠ destructive, irreversible
+- `proofpoint_essentials_orgs_sender_list_add` — safely add allow/block entries
+- `proofpoint_essentials_orgs_sender_list_remove` — safely remove allow/block entries
 
 ### Domains
 - `proofpoint_essentials_domains_list`
@@ -169,10 +171,20 @@ not scoped to a single org).
 - `proofpoint_essentials_users_list`
 - `proofpoint_essentials_users_get`
 - `proofpoint_essentials_users_create` — params: `orgDomain`, non-empty `users[]` with required `primary_email` and optional `firstname`, `surname`, `type`, `is_active`, `send_welcome_email`, `alias_emails`. Users are sent to Proofpoint as a bare array of User objects; returns `{ summary: { requested, returned, succeeded, failed, unconfirmed }, results }` with raw per-item results only when every returned item succeeded and none are unconfirmed, including missing items. Requested is the submitted count (raised to returned only on over-return); missing response items count as unconfirmed. Any failed item sets `isError`. Any failure or unconfirmed item makes `results` a cleaned per-item list `{ index, outcome, status, code, message }` with other fields omitted; succeeded items are created and must not be retried. Response-only fields (uid, password, creation_date, last_update, last_login) are ignored on create.
-- `proofpoint_essentials_users_update` ⚠ high-impact
+- `proofpoint_essentials_users_update` ⚠ high-impact — omitting `type` previously risked resetting accounts to End User. When `type` and `role` are omitted, this tool now reads and preserves the existing `type` (and `role` if present), refusing the update if a non-empty type cannot be read. Prefer sender-list tools for allow/block changes.
 - `proofpoint_essentials_users_delete` ⚠ destructive, irreversible
 
-The create serialization and result normalization fix requires `@wyre-ai/node-proofpoint-essentials >= 1.0.2`, which this package depends on.
+- `proofpoint_essentials_users_sender_list_add` — safely add allow/block entries
+- `proofpoint_essentials_users_sender_list_remove` — safely remove allow/block entries
+
+Sender-list tools use the dedicated `/sender-lists` GET/PATCH API and never PUT a
+user or organization or change account type/role. Pass `orgDomain`, user `email`
+(for user tools), `list: "allow" | "block"`, and a non-empty `entries` array of
+emails, domains, IPv4 addresses, CIDRs, or Proofpoint wildcards. Matching is
+case-insensitive; adding moves matching entries off the opposite list. Both lists
+are preserved and written together. Results include changes, skipped entries,
+and before/after snapshots. These read/modify/write operations are not atomic;
+concurrent edits can overwrite one another.
 
 ### Endpoint discovery
 - `proofpoint_essentials_endpoint_discover` — resolve which region hosts a customer domain
