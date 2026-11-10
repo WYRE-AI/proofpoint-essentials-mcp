@@ -533,6 +533,16 @@ describe("user update account type preservation", () => {
     });
     expect(existing).toMatchObject({ uid: 1, password: "secret", surname: "Original" });
   });
+  it("preserves account type while applying a supplied role when type is omitted", async () => {
+    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type: "organization_admin", role: "user" }) } });
+    await handleToolCall(client, "proofpoint_essentials_users_update", {
+      ...args, data: { surname: "Updated", role: "admin" },
+    });
+    expect(client.users.get).toHaveBeenCalledWith("example.com", "user@example.com");
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
+      type: "organization_admin", role: "admin", surname: "Updated",
+    });
+  });
   for (const field of ["type", "role"]) {
     it.each([undefined, null, "", "   "])(`preserves account type and role when ${field} is %j`, async (value) => {
       const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type: "organization_admin", role: "admin" }) } });

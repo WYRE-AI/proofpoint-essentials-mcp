@@ -60,7 +60,7 @@ export async function createUsers(
   return batchCreateResult("user", results, inputs.length);
 }
 
-/** Update a user, preserving GET fields when account type and role are omitted. */
+/** Update a user, preserving GET fields when account type is omitted. */
 export async function updateUser(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
@@ -74,7 +74,7 @@ export async function updateUser(
   for (const field of ["type", "role"]) {
     if (!supplied(field)) delete body[field];
   }
-  if (!supplied("type") && !supplied("role")) {
+  if (!supplied("type")) {
     const existing = await client.users.get(orgDomain, email);
     if (typeof existing.type !== "string" || existing.type.trim() === "") {
       return errorResult("Update refused: existing account type/role could not be read reliably; refusing to risk resetting the account to End User.");
