@@ -68,8 +68,12 @@ export async function updateUser(
   const orgDomain = requireString(args, "orgDomain");
   const email = requireString(args, "email");
   const data = requireObject(args, "data");
-  let body = { ...data };
-  const supplied = (field: string) => Object.hasOwn(data, field) && data[field] !== undefined;
+  let body = Object.fromEntries(Object.entries(data).filter(([, value]) => value !== null && value !== undefined));
+  const supplied = (field: string) => Object.hasOwn(body, field)
+    && (typeof body[field] !== "string" || body[field].trim() !== "");
+  for (const field of ["type", "role"]) {
+    if (!supplied(field)) delete body[field];
+  }
   if (!supplied("type") && !supplied("role")) {
     const existing = await client.users.get(orgDomain, email);
     if (typeof existing.type !== "string" || existing.type.trim() === "") {
@@ -82,7 +86,7 @@ export async function updateUser(
     }
     body = {
       ...preserved,
-      ...data,
+      ...body,
       type: existing.type,
       ...(existing.role !== undefined && !supplied("role") ? { role: existing.role } : {}),
     };

@@ -533,6 +533,29 @@ describe("user update account type preservation", () => {
     });
     expect(existing).toMatchObject({ uid: 1, password: "secret", surname: "Original" });
   });
+  for (const field of ["type", "role"]) {
+    it.each([undefined, null, "", "   "])(`preserves account type and role when ${field} is %j`, async (value) => {
+      const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type: "organization_admin", role: "admin" }) } });
+      await handleToolCall(client, "proofpoint_essentials_users_update", {
+        ...args, data: { surname: "Updated", [field]: value },
+      });
+      expect(client.users.get).toHaveBeenCalledWith("example.com", "user@example.com");
+      expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
+        type: "organization_admin", role: "admin", surname: "Updated",
+      });
+    });
+  }
+  it.each([null, undefined])("preserves existing fields when an update value is %j", async (firstname) => {
+    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({
+      type: "organization_admin", role: "admin", firstname: "Example", surname: "Original",
+    }) } });
+    await handleToolCall(client, "proofpoint_essentials_users_update", {
+      ...args, data: { surname: "Updated", firstname, department: "" },
+    });
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
+      type: "organization_admin", role: "admin", firstname: "Example", surname: "Updated", department: "",
+    });
+  });
   it.each([undefined, null, "", "   ", 123])("fails closed when existing type is %j", async (type) => {
     const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type, role: "admin" }) } });
     const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_update", args));
