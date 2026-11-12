@@ -63,8 +63,9 @@ const domainProp = {
 const orgDomainProp = { ...domainProp, description: "The target organization's primary domain." };
 
 /**
- * Block-list add is a routine write for unattended automation: it can only make
- * mail stricter, and it is idempotent.
+ * Block-list add is a routine write for unattended automation: it only adds
+ * entries to the block list, never touches the allow list or the user record,
+ * and is idempotent.
  */
 const ROUTINE_WRITE_ANNOTATIONS = {
   readOnlyHint: false,

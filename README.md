@@ -155,7 +155,8 @@ takes the target customer organization's domain as a per-call argument (credenti
 not scoped to a single org). Arguments that become part of an upstream URL path
 (`orgDomain`, `domain`, and the user `email` for update, delete and sender-list tools) are
 rejected when they contain whitespace, control characters, `/`, `\`, `?` or `#`, or are
-exactly `.` or `..`.
+exactly `.` or `..`. A user `email` used as a path segment must also be shaped like an
+email address: a local part, an `@`, then a domain.
 
 ### Organizations
 - `proofpoint_essentials_org_get` — get org data and its domains
@@ -209,15 +210,21 @@ spelling wins) and matched case-insensitively.
 
 How a change works: read the current lists, change only the target list, write both lists
 (the target as modified, the other exactly as read) with PATCH, then re-read and verify
-that every added entry is present, every removed entry is absent, and the other list holds
-the same entries as before. If nothing would change, no write is made (`changed: false`).
-If verification fails, or the lists cannot be read as an object of string lists, the tool
-returns an error instead of a success. These operations are not atomic: read, change,
-write, re-read; the last writer wins.
+that both lists hold exactly the expected entries (compared case-insensitively as sets): the
+target list as modified, the other list as before. If nothing would change, no write is made
+(`changed: false`). If verification fails, or the lists cannot be read as an object of string
+lists, the tool returns an error instead of a success. The mismatch error gives counts and
+one short sample per differing list, because error text is cut at 300 characters and email
+addresses in it are redacted. These operations are not atomic: read, change, write, re-read;
+the last writer wins.
+
+An invalid entry is reported by its position in your `entries` array (for example
+`Invalid entry 51 of 61`), since the entry text itself may be redacted in the error.
 
 The result reports `list`, `changed`, `verified` (after a confirmed write), `added` /
 `skipped_already_present` or `removed` / `skipped_not_present`, `counts` of both lists,
-and the target list `entries` (or `entries_omitted: true` above 100). Adding also reports
+and the target list `entries` (or `entries_omitted: true` above 100 entries or when any
+entry is longer than 320 characters). Adding also reports
 `also_on_allow_list` or `also_on_block_list` for requested entries that are on the other
 list; the other list is never changed.
 
@@ -228,11 +235,14 @@ Accepted entries:
   digits or hyphens, not starting or ending with a hyphen, host at most 253 characters,
   last label starting with a letter
 - IPv4 address (`192.168.1.10`), IPv4 wildcard only as `a.b.c.*` or `a.b.*.*`
-  (`10.91.*.*`), or CIDR from `/24` to `/32` (`192.168.1.0/24`)
+  (`10.91.*.*`), or CIDR from `/24` to `/32` (`192.168.1.0/24`); numbers are written
+  without leading zeros
 
 Refused: whitespace, control characters, `< > " '`, IPv6, wildcards in a host
 (`*.example.com`, `*.com`, `*@*.com`; list the domain itself), `*`, and ranges larger than
-`/24`.
+`/24`. The same rules apply to the remove tools, so an existing entry that breaks them
+(for example `10.0.0.0/8`) cannot be removed with these tools; remove it in the Proofpoint
+console.
 
 Known limit: there is no public-suffix list, so entries such as `co.uk` or `gmail.com` are
 accepted. Review entries before adding them.
@@ -241,6 +251,9 @@ Caveat: the sender-lists endpoints, their response keys and the PATCH semantics 
 replace) come from the `@wyre-ai/node-proofpoint-essentials` SDK and have not been
 exercised against a live Proofpoint account. Sending both lists is meant to be correct under
 either PATCH behaviour, and the tools fail closed, but treat the first live use with care.
+One residual risk: an empty response (an empty object, `204`, or an empty body) reads as two
+empty lists, and a missing key reads as an empty list; if the upstream answers with nothing
+and PATCH replaces, the other list is written back empty.
 There is no sender-list read tool yet. These tools require
 `@wyre-ai/node-proofpoint-essentials` >= 1.1.0.
 

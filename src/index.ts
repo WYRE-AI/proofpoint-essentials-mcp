@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Proofpoint Essentials MCP server — flat 20-tool surface.
+ * Proofpoint Essentials MCP server — flat tool surface (the list is in src/tools.ts).
  *
  * Transports:
  * - stdio (default): local Claude Desktop / CLI usage. `serveStdio` owns the
