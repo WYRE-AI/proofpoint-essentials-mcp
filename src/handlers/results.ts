@@ -120,7 +120,7 @@ export function requireEmailSegment(args: Record<string, unknown>, key: string):
   const value = requirePathSegment(args, key);
   const at = value.indexOf("@");
   if (at < 1 || at === value.length - 1) {
-    throw new ToolInputError(`Argument "${key}" must be an email address (local@domain).`);
+    throw new ToolInputError(`Argument "${key}" must be an email address with a local part, an at sign and a domain.`);
   }
   return value;
 }

@@ -711,7 +711,8 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
       ["a@*", "domain"], ["*@a", "domain"], ["*", "wildcard"], ["*.*.*.*", "wildcard"],
       ["10.*.*.*", "wildcard"], ["10.*.1.1", "wildcard"], ["256.1.1.*", "wildcard"],
       ["0.0.0.0/0", "larger than /24"], ["10.0.0.0/8", "larger than /24"], ["10.0.0.0/23", "larger than /24"],
-      ["10.0.0.0/33", "prefix"], ["10.0.0.0/24/1", "CIDR"], ["10.0.0/24", "CIDR"], ["999.0.0.0/24", "CIDR"],
+      ["10.0.0.0/33", "prefix"], ["10.0.0.0/024", "CIDR"], ["10.0.0.0/032", "CIDR"], ["010.1.1.*", "wildcard"],
+      ["10.0.0.0/24/1", "CIDR"], ["10.0.0/24", "CIDR"], ["999.0.0.0/24", "CIDR"],
       ["2001:db8::1", "IPv6"], ["[::1]", "IPv6"], ["user@[2001:db8::1]", "IPv6"],
       ["a@b", "domain"], ["foo.123", "domain"], ["user@192.168.1.1", "domain"],
       ["999.999.999.999", "IPv4"], ["10.91", "IPv4"],
@@ -738,6 +739,22 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
       expect(result.content[0].text).toContain(JSON.stringify("!".repeat(80)));
       expect(result.content[0].text).not.toContain("!".repeat(81));
       expect((await run(client, "block", "add", ["*.*"])).content[0].text).toContain('"*.*"');
+    });
+
+    it("identifies an email-shaped invalid entry by its position, which survives redaction", async () => {
+      const { client } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      const valid = (from: number, count: number) =>
+        Array.from({ length: count }, (_, i) => `d${from + i}.example.com`);
+      const entries = [...valid(0, 50), "someone@nodot", ...valid(50, 10)];
+      const text = (await run(client, "block", "add", entries)).content[0].text;
+      expect(text).toContain("Invalid entry 51 of 61");
+      expect(text).toContain("domain needs at least two labels");
+    });
+
+    it("counts the position in the caller's array even when earlier entries are duplicates", async () => {
+      const { client } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      const text = (await run(client, "block", "add", ["a.example.com", "A.example.com", "*.*"])).content[0].text;
+      expect(text).toContain("Invalid entry 3 of 3");
     });
 
     it("explains that IPv6, host wildcards and large ranges are unsupported", async () => {
@@ -825,6 +842,15 @@ describe("path-argument safety", () => {
       orgDomain: "acme.com", email: "..",
     }));
     expect(result.isError).toBeUndefined();
+  });
+
+  it.each(["nouser", "@example.org", "user@"])("the email-shape message for %j survives redaction", async (email) => {
+    const client = stubClient();
+    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_delete", {
+      orgDomain: "acme.com", email, [CONFIRM_ARG]: true,
+    }));
+    expect(result.content[0].text).toContain('Argument "email" must be an email address with a local part, an at sign and a domain');
+    expect(result.content[0].text).not.toContain("[redacted-email]");
   });
 
   it("accepts ordinary domains and emails", async () => {

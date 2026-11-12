@@ -16,7 +16,9 @@ import {
 
 const MAX_ENTRIES = 100;
 const LOCAL_PART = /^[a-z0-9.!#$%&*+/=?^_`{|}~-]{1,64}$/i;
-const DOMAIN_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+/** Up to three digits without leading zeros, as isIPv4 requires for plain addresses. */
+const CANONICAL_NUMBER = /^(0|[1-9]\d{0,2})$/;
+const DOMAIN_LABEL =/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 
 type Lists = Required<SenderLists>;
 
@@ -36,7 +38,7 @@ function domainProblem(host: string): string | null {
 
 function cidrProblem(entry: string): string | null {
   const [ip, prefix, ...extra] = entry.split("/");
-  if (extra.length > 0 || !isIPv4(ip) || !/^\d{1,3}$/.test(prefix)) {
+  if (extra.length > 0 || !isIPv4(ip) || !CANONICAL_NUMBER.test(prefix)) {
     return "CIDR must be a valid IPv4 address, a slash, and a prefix";
   }
   if (Number(prefix) > 32) return "CIDR prefix must be between 24 and 32";
@@ -47,7 +49,7 @@ function cidrProblem(entry: string): string | null {
 /** Only a.b.c.* and a.b.*.* with numeric octets are supported wildcards. */
 function ipv4WildcardProblem(entry: string): string | null {
   const [a, b, c, d, ...extra] = entry.split(".");
-  const octet = (part: string | undefined) => /^\d{1,3}$/.test(part ?? "") && Number(part) <= 255;
+  const octet = (part: string | undefined) => CANONICAL_NUMBER.test(part ?? "") && Number(part) <= 255;
   return extra.length === 0 && d === "*" && octet(a) && octet(b) && (c === "*" || octet(c))
     ? null
     : "IPv4 wildcards must be a.b.c.* or a.b.*.* with numbers from 0 to 255";
@@ -76,22 +78,25 @@ function entryProblem(entry: string): string | null {
 
 /** Validated entries, de-duplicated case-insensitively with the first spelling winning. */
 function requireEntries(args: Record<string, unknown>): string[] {
-  const unique = new Map<string, string>();
-  for (const entry of requireStringArray(args, "entries")) {
+  const given = requireStringArray(args, "entries");
+  const unique = new Map<string, { entry: string; position: number }>();
+  given.forEach((entry, index) => {
     const key = entry.toLowerCase();
-    if (!unique.has(key)) unique.set(key, entry);
+    if (!unique.has(key)) unique.set(key, { entry, position: index + 1 });
+  });
+  if (unique.size > MAX_ENTRIES) {
+    throw new ToolInputError(`entries must contain at most ${MAX_ENTRIES} distinct entries; got ${unique.size}.`);
   }
-  const entries = [...unique.values()];
-  if (entries.length > MAX_ENTRIES) {
-    throw new ToolInputError(`entries must contain at most ${MAX_ENTRIES} distinct entries; got ${entries.length}.`);
-  }
-  for (const entry of entries) {
+  for (const { entry, position } of unique.values()) {
     const problem = entryProblem(entry);
     if (problem !== null) {
-      throw new ToolInputError(`Invalid entry ${JSON.stringify(entry.slice(0, 80))}: ${problem}`);
+      // The position survives the dispatcher's email redaction, which hides the entry itself.
+      throw new ToolInputError(
+        `Invalid entry ${position} of ${given.length} ${JSON.stringify(entry.slice(0, 80))}: ${problem}`
+      );
     }
   }
-  return entries;
+  return [...unique.values()].map(({ entry }) => entry);
 }
 
 /** Copy a sender-lists response, refusing anything that is not clearly a pair of string lists. */
