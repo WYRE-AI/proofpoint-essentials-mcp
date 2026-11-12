@@ -1,7 +1,15 @@
 /** Safe read/modify/PATCH operations on dedicated sender-list resources. */
 import { isIPv4 } from "node:net";
 import type { ProofpointEssentialsClient, SenderLists } from "@wyre-ai/node-proofpoint-essentials";
-import { jsonResult, requireString, requireStringArray, ToolInputError, type ToolResult } from "./results.js";
+import {
+  jsonResult,
+  requireEmailSegment,
+  requirePathSegment,
+  requireString,
+  requireStringArray,
+  ToolInputError,
+  type ToolResult,
+} from "./results.js";
 
 /** Validate supported sender entries without whitespace or injection characters. */
 function validEntry(entry: string): boolean {
@@ -37,8 +45,8 @@ export async function changeSenderList(
   scope: "user" | "org",
   action: "add" | "remove"
 ): Promise<ToolResult> {
-  const orgDomain = requireString(args, "orgDomain");
-  const email = scope === "user" ? requireString(args, "email") : undefined;
+  const orgDomain = requirePathSegment(args, "orgDomain");
+  const email = scope === "user" ? requireEmailSegment(args, "email") : undefined;
   const list = requireString(args, "list");
   if (list !== "allow" && list !== "block") throw new ToolInputError('list must be "allow" or "block".');
   const entries = requireStringArray(args, "entries");

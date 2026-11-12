@@ -7,7 +7,9 @@ import {
   errorResult,
   jsonResult,
   requireObject,
+  requireEmailSegment,
   requireObjectArray,
+  requirePathSegment,
   requireString,
   textResult,
   type ToolResult,
@@ -17,7 +19,7 @@ export async function listUsers(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const orgDomain = requireString(args, "orgDomain");
+  const orgDomain = requirePathSegment(args, "orgDomain");
   const users = await client.users.list(orgDomain);
   return jsonResult({ count: users.length, users });
 }
@@ -26,7 +28,8 @@ export async function getUser(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const orgDomain = requireString(args, "orgDomain");
+  const orgDomain = requirePathSegment(args, "orgDomain");
+  // The SDK sends the email as a query parameter here, so it is not a path segment.
   const email = requireString(args, "email");
   const user = await client.users.get(orgDomain, email);
   return jsonResult(user);
@@ -36,7 +39,7 @@ export async function createUsers(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const orgDomain = requireString(args, "orgDomain");
+  const orgDomain = requirePathSegment(args, "orgDomain");
   const users = requireObjectArray(args, "users");
   for (const [index, user] of users.entries()) {
     if (typeof user.primary_email !== "string" || user.primary_email.trim() === "") {
@@ -65,8 +68,8 @@ export async function updateUser(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const orgDomain = requireString(args, "orgDomain");
-  const email = requireString(args, "email");
+  const orgDomain = requirePathSegment(args, "orgDomain");
+  const email = requireEmailSegment(args, "email");
   const data = requireObject(args, "data");
   let body = Object.fromEntries(Object.entries(data).filter(([, value]) => value !== null && value !== undefined));
   const supplied = (field: string) => Object.hasOwn(body, field)
@@ -100,8 +103,8 @@ export async function deleteUser(
   args: Record<string, unknown>,
   elicitation: ElicitationContext
 ): Promise<ToolResult | InputRequiredResult> {
-  const orgDomain = requireString(args, "orgDomain");
-  const email = requireString(args, "email");
+  const orgDomain = requirePathSegment(args, "orgDomain");
+  const email = requireEmailSegment(args, "email");
 
   const gate = confirmDestructive(
     elicitation,

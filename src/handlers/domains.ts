@@ -7,7 +7,7 @@ import {
   errorResult,
   jsonResult,
   requireObject,
-  requireString,
+  requirePathSegment,
   requireStringArray,
   textResult,
   type ToolResult,
@@ -17,7 +17,7 @@ export async function listDomains(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const orgDomain = requireString(args, "orgDomain");
+  const orgDomain = requirePathSegment(args, "orgDomain");
   const domains = await client.domains.list(orgDomain);
   return jsonResult({ count: domains.length, domains });
 }
@@ -26,7 +26,7 @@ export async function createDomains(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const orgDomain = requireString(args, "orgDomain");
+  const orgDomain = requirePathSegment(args, "orgDomain");
   const domains = requireStringArray(args, "domains");
   const results: BatchItemResult[] = await client.domains.create(orgDomain, domains);
   return batchCreateResult("domain", results, domains.length);
@@ -36,8 +36,8 @@ export async function updateDomain(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const orgDomain = requireString(args, "orgDomain");
-  const domain = requireString(args, "domain");
+  const orgDomain = requirePathSegment(args, "orgDomain");
+  const domain = requirePathSegment(args, "domain");
   const data = requireObject(args, "data");
   const result = await client.domains.update(orgDomain, domain, data);
   return jsonResult(result);
@@ -48,8 +48,8 @@ export async function deleteDomain(
   args: Record<string, unknown>,
   elicitation: ElicitationContext
 ): Promise<ToolResult | InputRequiredResult> {
-  const orgDomain = requireString(args, "orgDomain");
-  const domain = requireString(args, "domain");
+  const orgDomain = requirePathSegment(args, "orgDomain");
+  const domain = requirePathSegment(args, "domain");
 
   const gate = confirmDestructive(
     elicitation,

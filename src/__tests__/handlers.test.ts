@@ -515,6 +515,67 @@ describe("safe sender lists", () => {
   }
 });
 
+/** Every stubbed vendor method has zero calls. */
+function expectNoVendorCalls(client: ProofpointEssentialsClient) {
+  for (const resource of Object.values(client as unknown as Stub)) {
+    for (const method of Object.values(resource)) expect(method).not.toHaveBeenCalled();
+  }
+}
+
+describe("path-argument safety", () => {
+  const dotted = [".", ".."];
+  const unsafe = [...dotted, "a/b", "a\\b", "a?b", "a#b", "a b", " a", "a\tb", "a\u0000b", "a\u007fb"];
+  const calls: Array<[string, Record<string, unknown>, string[]]> = [
+    ["org_get", { domain: "acme.com" }, ["domain"]],
+    ["org_set_active", { domain: "acme.com", isActive: true }, ["domain"]],
+    ["org_delete", { domain: "acme.com", [CONFIRM_ARG]: true }, ["domain"]],
+    ["endpoint_discover", { domain: "acme.com" }, ["domain"]],
+    ["domains_list", { orgDomain: "acme.com" }, ["orgDomain"]],
+    ["domains_create", { orgDomain: "acme.com", domains: ["a.com"] }, ["orgDomain"]],
+    ["domains_update", { orgDomain: "acme.com", domain: "a.acme.com", data: { x: 1 } }, ["orgDomain", "domain"]],
+    ["domains_delete", { orgDomain: "acme.com", domain: "a.acme.com", [CONFIRM_ARG]: true }, ["orgDomain", "domain"]],
+    ["users_list", { orgDomain: "acme.com" }, ["orgDomain"]],
+    ["users_get", { orgDomain: "acme.com", email: "a@acme.com" }, ["orgDomain"]],
+    ["users_create", { orgDomain: "acme.com", users: [{ primary_email: "a@acme.com" }] }, ["orgDomain"]],
+    ["users_update", { orgDomain: "acme.com", email: "a@acme.com", data: { surname: "S" } }, ["orgDomain", "email"]],
+    ["users_delete", { orgDomain: "acme.com", email: "a@acme.com", [CONFIRM_ARG]: true }, ["orgDomain", "email"]],
+    ["features_get", { orgDomain: "acme.com" }, ["orgDomain"]],
+    ["features_update", { orgDomain: "acme.com", features: { x: 1 } }, ["orgDomain"]],
+    ["licensing_get", { orgDomain: "acme.com" }, ["orgDomain"]],
+    ["licensing_update", { orgDomain: "acme.com", licensing: { x: 1 } }, ["orgDomain"]],
+    ["package_update", { orgDomain: "acme.com", package: { x: 1 } }, ["orgDomain"]],
+    ["reporting_get", { orgDomain: "acme.com" }, ["orgDomain"]],
+  ];
+  const cases = calls.flatMap(([tool, valid, keys]) =>
+    keys.flatMap((key) => (key === "email" ? [...unsafe, "plain", "@acme.com", "a@"] : unsafe)
+      .map((value) => [tool, key, value, valid] as const)));
+
+  it.each(cases)("%s rejects %s=%j before any vendor call", async (tool, key, value, valid) => {
+    const client = stubClient();
+    const result = asTool(await handleToolCall(client, `proofpoint_essentials_${tool}`, { ...valid, [key]: value }));
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain(key);
+    expectNoVendorCalls(client);
+  });
+
+  it("users_get still accepts a plain email because it only goes in the query string", async () => {
+    const client = stubClient();
+    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_get", {
+      orgDomain: "acme.com", email: "..",
+    }));
+    expect(result.isError).toBeUndefined();
+  });
+
+  it("accepts ordinary domains and emails", async () => {
+    const client = stubClient();
+    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_delete", {
+      orgDomain: "sub.acme.co.uk", email: "first.last+tag@acme.com", [CONFIRM_ARG]: true,
+    }));
+    expect(result.isError).toBeUndefined();
+    expect(client.users.delete).toHaveBeenCalledWith("sub.acme.co.uk", "first.last+tag@acme.com");
+  });
+});
+
 describe("user update account type preservation", () => {
   const args = { orgDomain: "example.com", email: "user@example.com", data: { surname: "Updated" } };
   it("merges all existing fields with changes without response-only fields", async () => {

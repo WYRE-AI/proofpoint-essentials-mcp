@@ -2,13 +2,20 @@
 import type { InputRequiredResult } from "@modelcontextprotocol/server";
 import type { ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
 import { confirmDestructive, type ElicitationContext } from "../elicitation.js";
-import { errorResult, jsonResult, requireBoolean, requireString, textResult, type ToolResult } from "./results.js";
+import {
+  errorResult,
+  jsonResult,
+  requireBoolean,
+  requirePathSegment,
+  textResult,
+  type ToolResult,
+} from "./results.js";
 
 export async function getOrg(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const domain = requireString(args, "domain");
+  const domain = requirePathSegment(args, "domain");
   const org = await client.orgs.get(domain);
   return jsonResult(org);
 }
@@ -17,7 +24,7 @@ export async function setOrgActive(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
-  const domain = requireString(args, "domain");
+  const domain = requirePathSegment(args, "domain");
   const isActive = requireBoolean(args, "isActive");
   const org = await client.orgs.setActive(domain, isActive);
   return jsonResult(org);
@@ -28,7 +35,7 @@ export async function deleteOrg(
   args: Record<string, unknown>,
   elicitation: ElicitationContext
 ): Promise<ToolResult | InputRequiredResult> {
-  const domain = requireString(args, "domain");
+  const domain = requirePathSegment(args, "domain");
 
   const gate = confirmDestructive(
     elicitation,
