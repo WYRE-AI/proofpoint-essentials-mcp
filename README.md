@@ -152,14 +152,19 @@ MCP_TRANSPORT=http MCP_ALLOW_INSECURE_DEV=1 npm start
 
 Proofpoint Essentials is an MSP multi-tenant API — every org/domain/user-scoped tool
 takes the target customer organization's domain as a per-call argument (credentials are
-not scoped to a single org).
+not scoped to a single org). Arguments that become part of an upstream URL path
+(`orgDomain`, `domain`, and the user `email` for update, delete and sender-list tools) are
+rejected when they contain whitespace, control characters, `/`, `\`, `?` or `#`, or are
+exactly `.` or `..`.
 
 ### Organizations
 - `proofpoint_essentials_org_get` — get org data and its domains
 - `proofpoint_essentials_org_set_active` — activate/deactivate an org ⚠ high-impact
 - `proofpoint_essentials_org_delete` — delete an org ⚠ destructive, irreversible
-- `proofpoint_essentials_orgs_sender_list_add` — safely add allow/block entries
-- `proofpoint_essentials_orgs_sender_list_remove` — safely remove allow/block entries
+- `proofpoint_essentials_org_block_list_add` — add entries to the org block list
+- `proofpoint_essentials_org_block_list_remove` — remove entries from the org block list ⚠ high-impact
+- `proofpoint_essentials_org_allow_list_add` — add entries to the org allow list ⚠ high-impact
+- `proofpoint_essentials_org_allow_list_remove` — remove entries from the org allow list ⚠ high-impact
 
 ### Domains
 - `proofpoint_essentials_domains_list`
@@ -171,20 +176,73 @@ not scoped to a single org).
 - `proofpoint_essentials_users_list`
 - `proofpoint_essentials_users_get`
 - `proofpoint_essentials_users_create` — params: `orgDomain`, non-empty `users[]` with required `primary_email` and optional `firstname`, `surname`, `type`, `is_active`, `send_welcome_email`, `alias_emails`. Users are sent to Proofpoint as a bare array of User objects; returns `{ summary: { requested, returned, succeeded, failed, unconfirmed }, results }` with raw per-item results only when every returned item succeeded and none are unconfirmed, including missing items. Requested is the submitted count (raised to returned only on over-return); missing response items count as unconfirmed. Any failed item sets `isError`. Any failure or unconfirmed item makes `results` a cleaned per-item list `{ index, outcome, status, code, message }` with other fields omitted; succeeded items are created and must not be retried. Response-only fields (uid, password, creation_date, last_update, last_login) are ignored on create.
-- `proofpoint_essentials_users_update` ⚠ high-impact — omitting `type` previously risked resetting accounts to End User. When `type` and `role` are omitted, this tool now reads and preserves the existing `type` (and `role` if present), refusing the update if a non-empty type cannot be read. Prefer sender-list tools for allow/block changes.
+- `proofpoint_essentials_users_update` ⚠ high-impact — always reads the existing user (matched by `primary_email`) and merges on every update, also when `type` is supplied, then sends the merged record back in full because the PUT may replace the whole record. It refuses, with no PUT, when the record cannot be read or has no account type to keep (to avoid resetting the account to End User). `data` must not be empty and `type`/`role` must be strings. Use the block/allow list tools for sender-list changes.
 - `proofpoint_essentials_users_delete` ⚠ destructive, irreversible
+- `proofpoint_essentials_users_block_list_add` — add entries to a user's block list
+- `proofpoint_essentials_users_block_list_remove` — remove entries from a user's block list ⚠ high-impact
+- `proofpoint_essentials_users_allow_list_add` — add entries to a user's allow list ⚠ high-impact
+- `proofpoint_essentials_users_allow_list_remove` — remove entries from a user's allow list ⚠ high-impact
 
-- `proofpoint_essentials_users_sender_list_add` — safely add allow/block entries
-- `proofpoint_essentials_users_sender_list_remove` — safely remove allow/block entries
+### Sender-list tools
 
-Sender-list tools use the dedicated `/sender-lists` GET/PATCH API and never PUT a
-user or organization or change account type/role. Pass `orgDomain`, user `email`
-(for user tools), `list: "allow" | "block"`, and a non-empty `entries` array of
-emails, domains, IPv4 addresses, CIDRs, or Proofpoint wildcards. Matching is
-case-insensitive; adding moves matching entries off the opposite list. Both lists
-are preserved and written together. Results include changes, skipped entries,
-and before/after snapshots. These read/modify/write operations are not atomic;
-concurrent edits can overwrite one another.
+There are 28 tools in total, including these eight. They have no `list` argument: block
+and allow are separate tools because the WYRE gateway grants access per tool name, not
+per argument. `block_list_add` is a routine, idempotent write meant for unattended
+automation. The other six are high-impact: allow-listing lets mail from that sender
+bypass spam filtering, removing a block entry re-admits a blocked sender, and removing an
+allow entry sends that sender's mail back through filtering.
+
+| Tool | Changes | Tier |
+|------|---------|------|
+| `proofpoint_essentials_org_block_list_add` | org block list, add | routine |
+| `proofpoint_essentials_org_block_list_remove` | org block list, remove | high-impact |
+| `proofpoint_essentials_org_allow_list_add` | org allow list, add | high-impact |
+| `proofpoint_essentials_org_allow_list_remove` | org allow list, remove | high-impact |
+| `proofpoint_essentials_users_block_list_add` | user block list, add | routine |
+| `proofpoint_essentials_users_block_list_remove` | user block list, remove | high-impact |
+| `proofpoint_essentials_users_allow_list_add` | user allow list, add | high-impact |
+| `proofpoint_essentials_users_allow_list_remove` | user allow list, remove | high-impact |
+
+Parameters: `orgDomain`, `email` (users tools only), and `entries`, an array of 1 to 100
+strings (each 1 to 320 characters). Entries are de-duplicated case-insensitively (first
+spelling wins) and matched case-insensitively.
+
+How a change works: read the current lists, change only the target list, write both lists
+(the target as modified, the other exactly as read) with PATCH, then re-read and verify
+that every added entry is present, every removed entry is absent, and the other list holds
+the same entries as before. If nothing would change, no write is made (`changed: false`).
+If verification fails, or the lists cannot be read as an object of string lists, the tool
+returns an error instead of a success. These operations are not atomic: read, change,
+write, re-read; the last writer wins.
+
+The result reports `list`, `changed`, `verified` (after a confirmed write), `added` /
+`skipped_already_present` or `removed` / `skipped_not_present`, `counts` of both lists,
+and the target list `entries` (or `entries_omitted: true` above 100). Adding also reports
+`also_on_allow_list` or `also_on_block_list` for requested entries that are on the other
+list; the other list is never changed.
+
+Accepted entries:
+
+- email `local@domain` (local part 1 to 64 characters, `*` allowed, so `*@example.com` works)
+- domain with at least two labels (`example.com`), each label 1 to 63 ASCII letters,
+  digits or hyphens, not starting or ending with a hyphen, host at most 253 characters,
+  last label starting with a letter
+- IPv4 address (`192.168.1.10`), IPv4 wildcard only as `a.b.c.*` or `a.b.*.*`
+  (`10.91.*.*`), or CIDR from `/24` to `/32` (`192.168.1.0/24`)
+
+Refused: whitespace, control characters, `< > " '`, IPv6, wildcards in a host
+(`*.example.com`, `*.com`, `*@*.com`; list the domain itself), `*`, and ranges larger than
+`/24`.
+
+Known limit: there is no public-suffix list, so entries such as `co.uk` or `gmail.com` are
+accepted. Review entries before adding them.
+
+Caveat: the sender-lists endpoints, their response keys and the PATCH semantics (merge or
+replace) come from the `@wyre-ai/node-proofpoint-essentials` SDK and have not been
+exercised against a live Proofpoint account. Sending both lists is meant to be correct under
+either PATCH behaviour, and the tools fail closed, but treat the first live use with care.
+There is no sender-list read tool yet. These tools require
+`@wyre-ai/node-proofpoint-essentials` >= 1.1.0.
 
 ### Endpoint discovery
 - `proofpoint_essentials_endpoint_discover` — resolve which region hosts a customer domain
