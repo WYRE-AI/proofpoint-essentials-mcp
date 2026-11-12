@@ -95,13 +95,13 @@ export async function updateUser(
   const data = Object.fromEntries(
     Object.entries(requireObject(args, "data")).filter(([, value]) => value !== null && value !== undefined)
   );
-  if (Object.keys(data).length === 0) {
-    throw new ToolInputError('Argument "data" must contain at least one field with a value.');
-  }
   for (const field of ["type", "role"]) {
     if (!(field in data)) continue;
     if (typeof data[field] !== "string") throw new ToolInputError(`"data.${field}" must be a string.`);
     if (data[field].trim() === "") delete data[field]; // blank means omitted
+  }
+  if (Object.keys(data).length === 0) {
+    throw new ToolInputError('Argument "data" must contain at least one field with a value.');
   }
 
   const existing = findUser(await client.users.get(orgDomain, email), email);

@@ -996,6 +996,8 @@ describe("users_update always read-merges the existing record", () => {
   it.each([
     ["empty", {}],
     ["only null and undefined values", { surname: null, firstname: undefined }],
+    ["only a blank type", { type: "" }],
+    ["only a blank type and role", { type: " ", role: "" }],
   ])("rejects data that is %s before any vendor call", async (_name, data) => {
     const client = clientWith(existing);
     const result = await update(client, { data });
