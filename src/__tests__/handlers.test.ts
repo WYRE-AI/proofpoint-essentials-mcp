@@ -476,7 +476,7 @@ describe("delete confirmations (MRTR-safe: reads first, DELETE last)", () => {
 
 const SENDER_UNREADABLE = "Existing sender lists could not be read safely; refusing update.";
 
-type ListsBehaviour = "merge" | "replace" | "ignore" | "drop-allow-list";
+type ListsBehaviour = "merge" | "replace" | "ignore" | "drop-allow-list" | "ignore-and-drop-allow-list";
 
 /**
  * A stateful fake of the sender-lists resource. "merge" and "replace" are the two
@@ -493,6 +493,7 @@ function senderListsClient(scope: "org" | "users", initial: unknown, behaviour: 
     if (behaviour === "merge") state = { ...current, ...lists };
     else if (behaviour === "replace") state = lists;
     else if (behaviour === "drop-allow-list") state = { ...current, ...lists, allow_list: [] };
+    else if (behaviour === "ignore-and-drop-allow-list") state = { ...current, allow_list: [] };
   });
   const client = stubClient({
     senderLists: scope === "users" ? { getUser: get, updateUser: update } : { getOrg: get, updateOrg: update },
@@ -640,6 +641,16 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
     expect(at101).toMatchObject({ entries_omitted: true, counts: { allow_list: 0, block_list: 101 } });
   });
 
+  it("omits entries when an upstream item is longer than a valid entry", async () => {
+    const { client } = senderListsClient(scope, {
+      allow_list: [], block_list: ["bad.example.com", "x".repeat(3_000_000)],
+    });
+    const result = await run(client, "block", "add", ["bad.example.com"]);
+    expect(result.content[0].text.length).toBeLessThan(1000);
+    expect(body(result)).toMatchObject({ changed: false, entries_omitted: true, counts: { block_list: 2 } });
+    expect(body(result)).not.toHaveProperty("entries");
+  });
+
   describe("fails closed when the write cannot be confirmed", () => {
     it("reports an error when the target change is not visible on re-read", async () => {
       const { client, update } = senderListsClient(scope, { allow_list: [], block_list: [] }, "ignore");
@@ -664,6 +675,41 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
       expect(result.content[0].text).toContain("could not be confirmed");
       expect(result.content[0].text).toContain("allow");
       expect(result.content[0].text).toContain("keep.example.com");
+    });
+    it("keeps the opposite-list problem and the closing guidance within the dispatcher's 300-character cap", async () => {
+      const { client } = senderListsClient(scope, {
+        allow_list: ["vip@partner.example.com"], block_list: [],
+      }, "ignore-and-drop-allow-list");
+      const entries = Array.from({ length: 30 }, (_, i) => `blocked-sender-number-${i}.example.com`);
+      const text = (await run(client, "block", "add", entries)).content[0].text;
+      expect(Array.from(text).length).toBeLessThanOrEqual(300);
+      expect(text).toContain("could not be confirmed");
+      expect(text).toContain("allow list differs: 1 missing, 0 unexpected");
+      expect(text).toContain("block list differs: 30 missing, 0 unexpected");
+      expect(text).toContain("check the lists");
+    });
+    it("stays informative when the entries are emails, which the dispatcher redacts", async () => {
+      const { client } = senderListsClient(scope, { allow_list: [], block_list: [] }, "ignore");
+      const entries = Array.from({ length: 30 }, (_, i) => `sender${i}@example.com`);
+      const text = (await run(client, "block", "add", entries)).content[0].text;
+      expect(text).toContain("block list differs: 30 missing, 0 unexpected");
+      expect(text).toContain("check the lists");
+    });
+    it("reports pre-existing target entries that vanished", async () => {
+      const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      get.mockResolvedValueOnce({ allow_list: [], block_list: ["old1.com", "old2.com"] })
+        .mockResolvedValueOnce({ allow_list: [], block_list: ["new.com"] });
+      const result = await run(client, "block", "add", ["new.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("block list differs: 2 missing, 0 unexpected (first: old1.com)");
+    });
+    it("reports unexpected entries that appeared on the target list", async () => {
+      const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      get.mockResolvedValueOnce({ allow_list: [], block_list: ["old.com"] })
+        .mockResolvedValueOnce({ allow_list: [], block_list: ["old.com", "new.com", "evil.com"] });
+      const result = await run(client, "block", "add", ["new.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("block list differs: 0 missing, 1 unexpected (first: evil.com)");
     });
     it("reports an error when the re-read is unreadable", async () => {
       const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });

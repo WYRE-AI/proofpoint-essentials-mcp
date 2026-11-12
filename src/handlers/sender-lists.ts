@@ -15,6 +15,7 @@ import {
 } from "./results.js";
 
 const MAX_ENTRIES = 100;
+const MAX_ENTRY_LENGTH = 320;
 const LOCAL_PART = /^[a-z0-9.!#$%&*+/=?^_`{|}~-]{1,64}$/i;
 /** Up to three digits without leading zeros, as isIPv4 requires for plain addresses. */
 const CANONICAL_NUMBER = /^(0|[1-9]\d{0,2})$/;
@@ -57,7 +58,7 @@ function ipv4WildcardProblem(entry: string): string | null {
 
 /** Why an entry is not a supported sender entry, or null when it is valid. */
 function entryProblem(entry: string): string | null {
-  if (entry.length < 1 || entry.length > 320) return "entry must be 1 to 320 characters";
+  if (entry.length < 1 || entry.length > MAX_ENTRY_LENGTH) return `entry must be 1 to ${MAX_ENTRY_LENGTH} characters`;
   if (/[\s<>"']|\p{Cc}/u.test(entry)) {
     return "entry must not contain whitespace, control characters, or any of < > \" '";
   }
@@ -99,7 +100,12 @@ function requireEntries(args: Record<string, unknown>): string[] {
   return [...unique.values()].map(({ entry }) => entry);
 }
 
-/** Copy a sender-lists response, refusing anything that is not clearly a pair of string lists. */
+/**
+ * Copy a sender-lists response, refusing anything that is not clearly a pair of string lists.
+ * Known limit: an empty object (or a 204 / empty body, which the SDK returns as {}) and a
+ * missing key both read as an empty list, so an upstream that answers with nothing is
+ * indistinguishable from two empty lists.
+ */
 function snapshot(value: unknown): Lists {
   const unreadable = () => new ToolInputError("Existing sender lists could not be read safely; refusing update.");
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw unreadable();
@@ -116,6 +122,21 @@ function snapshot(value: unknown): Lists {
 
 const includesEntry = (list: string[], entry: string) =>
   list.some((item) => item.toLowerCase() === entry.toLowerCase());
+
+/**
+ * Compare a list with what it should hold, case-insensitively as sets. The text is
+ * counts plus one short sample so that the whole error survives the dispatcher's
+ * 300-character cap (it also redacts email-shaped entries, so listing them says little).
+ */
+function describeDifference(name: string, expected: string[], actual: string[]): string | null {
+  const expectedKeys = new Set(expected.map((item) => item.toLowerCase()));
+  const actualKeys = new Set(actual.map((item) => item.toLowerCase()));
+  const missing = expected.filter((item) => !actualKeys.has(item.toLowerCase()));
+  const unexpected = actual.filter((item) => !expectedKeys.has(item.toLowerCase()));
+  if (missing.length === 0 && unexpected.length === 0) return null;
+  const first = Array.from(missing[0] ?? unexpected[0]).slice(0, 30).join("");
+  return `the ${name} list differs: ${missing.length} missing, ${unexpected.length} unexpected (first: ${first})`;
+}
 
 /** Read the lists, add or remove entries on one list, write both, then re-read to verify. */
 export async function changeSenderList(
@@ -155,7 +176,10 @@ export async function changeSenderList(
       }
       : { removed: changes, skipped_not_present: skipped }),
     counts: { allow_list: now.allow_list.length, block_list: now.block_list.length },
-    ...(now[target].length <= MAX_ENTRIES ? { entries: now[target] } : { entries_omitted: true }),
+    // Upstream data is echoed only when it is as small as a valid request could be.
+    ...(now[target].length <= MAX_ENTRIES && now[target].every((item) => item.length <= MAX_ENTRY_LENGTH)
+      ? { entries: now[target] }
+      : { entries_omitted: true }),
   });
 
   if (changes.length === 0) return jsonResult(report(before, false));
@@ -178,18 +202,13 @@ export async function changeSenderList(
     const reason = error instanceof Error ? error.message : String(error);
     return errorResult(`Sender-list write could not be confirmed: the lists could not be re-read (${reason}). Check the current lists before retrying.`);
   }
-  const problems: string[] = [];
-  const wrong = changes.filter((entry) => includesEntry(after[target], entry) !== (action === "add"));
-  if (wrong.length > 0) {
-    problems.push(`${action === "add" ? "added entries missing from" : "removed entries still on"} the ${list} list: ${wrong.join(", ")}`);
-  }
-  const missing = before[opposite].filter((item) => !includesEntry(after[opposite], item));
-  const unexpected = after[opposite].filter((item) => !includesEntry(before[opposite], item));
-  if (missing.length > 0 || unexpected.length > 0) {
-    problems.push(`the ${opposite.replace("_list", "")} list changed (missing: ${missing.join(", ") || "none"}; unexpected: ${unexpected.join(", ") || "none"})`);
-  }
+  // The opposite list comes first: it is the more important half of a failure.
+  const problems = [
+    describeDifference(list === "allow" ? "block" : "allow", before[opposite], after[opposite]),
+    describeDifference(list, updated, after[target]),
+  ].filter((problem): problem is string => problem !== null);
   if (problems.length > 0) {
-    return errorResult(`Sender-list write could not be confirmed on re-read: ${problems.join("; ")}. The change may be partly applied; check the current lists.`);
+    return errorResult(`Sender-list write could not be confirmed: ${problems.join("; ")}. May be partly applied; check the lists.`);
   }
   return jsonResult(report(after, true));
 }
