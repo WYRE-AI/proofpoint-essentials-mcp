@@ -701,7 +701,7 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
         .mockResolvedValueOnce({ allow_list: [], block_list: ["new.com"] });
       const result = await run(client, "block", "add", ["new.com"]);
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("block list differs: 2 missing, 0 unexpected (first: old1.com)");
+      expect(result.content[0].text).toContain("block list differs: 2 missing, 0 unexpected (first: \"old1.com\")");
     });
     it("reports unexpected entries that appeared on the target list", async () => {
       const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
@@ -709,7 +709,16 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
         .mockResolvedValueOnce({ allow_list: [], block_list: ["old.com", "new.com", "evil.com"] });
       const result = await run(client, "block", "add", ["new.com"]);
       expect(result.isError).toBe(true);
-      expect(result.content[0].text).toContain("block list differs: 0 missing, 1 unexpected (first: evil.com)");
+      expect(result.content[0].text).toContain("block list differs: 0 missing, 1 unexpected (first: \"evil.com\")");
+    });
+    it("puts the guidance before the details and escapes control characters in the sample", async () => {
+      const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      get.mockResolvedValueOnce({ allow_list: [], block_list: [] })
+        .mockResolvedValueOnce({ allow_list: [], block_list: ["new.com", "\nevil.com"] });
+      const text = (await run(client, "block", "add", ["new.com"])).content[0].text;
+      expect(text).not.toContain("\n");
+      expect(text).toContain('(first: "\\nevil.com")');
+      expect(text.indexOf("check the lists")).toBeLessThan(text.indexOf("block list differs"));
     });
     it("reports an error when the re-read is unreadable", async () => {
       const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });

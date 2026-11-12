@@ -19,7 +19,7 @@ const MAX_ENTRY_LENGTH = 320;
 const LOCAL_PART = /^[a-z0-9.!#$%&*+/=?^_`{|}~-]{1,64}$/i;
 /** Up to three digits without leading zeros, as isIPv4 requires for plain addresses. */
 const CANONICAL_NUMBER = /^(0|[1-9]\d{0,2})$/;
-const DOMAIN_LABEL =/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+const DOMAIN_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 
 type Lists = Required<SenderLists>;
 
@@ -127,6 +127,7 @@ const includesEntry = (list: string[], entry: string) =>
  * Compare a list with what it should hold, case-insensitively as sets. The text is
  * counts plus one short sample so that the whole error survives the dispatcher's
  * 300-character cap (it also redacts email-shaped entries, so listing them says little).
+ * The sample is upstream text, so it is JSON-quoted to escape control characters.
  */
 function describeDifference(name: string, expected: string[], actual: string[]): string | null {
   const expectedKeys = new Set(expected.map((item) => item.toLowerCase()));
@@ -134,7 +135,7 @@ function describeDifference(name: string, expected: string[], actual: string[]):
   const missing = expected.filter((item) => !actualKeys.has(item.toLowerCase()));
   const unexpected = actual.filter((item) => !expectedKeys.has(item.toLowerCase()));
   if (missing.length === 0 && unexpected.length === 0) return null;
-  const first = Array.from(missing[0] ?? unexpected[0]).slice(0, 30).join("");
+  const first = JSON.stringify(Array.from(missing[0] ?? unexpected[0]).slice(0, 30).join(""));
   return `the ${name} list differs: ${missing.length} missing, ${unexpected.length} unexpected (first: ${first})`;
 }
 
@@ -202,13 +203,14 @@ export async function changeSenderList(
     const reason = error instanceof Error ? error.message : String(error);
     return errorResult(`Sender-list write could not be confirmed: the lists could not be re-read (${reason}). Check the current lists before retrying.`);
   }
-  // The opposite list comes first: it is the more important half of a failure.
+  // The guidance comes before the details so the cap can never cut it off. The opposite
+  // list comes first among the details: it is the more important half of a failure.
   const problems = [
     describeDifference(list === "allow" ? "block" : "allow", before[opposite], after[opposite]),
     describeDifference(list, updated, after[target]),
   ].filter((problem): problem is string => problem !== null);
   if (problems.length > 0) {
-    return errorResult(`Sender-list write could not be confirmed: ${problems.join("; ")}. May be partly applied; check the lists.`);
+    return errorResult(`Sender-list write could not be confirmed and may be partly applied; check the lists. Found: ${problems.join("; ")}.`);
   }
   return jsonResult(report(after, true));
 }
