@@ -15,11 +15,21 @@ const HIGH_IMPACT_TIER_B = [
   "proofpoint_essentials_features_update",
   "proofpoint_essentials_licensing_update",
   "proofpoint_essentials_package_update",
+  "proofpoint_essentials_org_block_list_remove",
+  "proofpoint_essentials_org_allow_list_add",
+  "proofpoint_essentials_org_allow_list_remove",
+  "proofpoint_essentials_users_block_list_remove",
+  "proofpoint_essentials_users_allow_list_add",
+  "proofpoint_essentials_users_allow_list_remove",
 ];
 
 describe("TOOLS surface", () => {
-  it("has 24 tools", () => {
-    expect(TOOLS.length).toBe(24);
+  it("has 28 tools", () => {
+    expect(TOOLS.length).toBe(28);
+  });
+
+  it("never describes a tool as SAFE", () => {
+    for (const tool of TOOLS) expect(tool.description).not.toMatch(/\bSAFE\b/i);
   });
 
   it("has unique tool names", () => {
@@ -128,15 +138,74 @@ describe("TOOLS surface", () => {
   });
 });
 
-for (const scope of ["users", "orgs"]) {
-  for (const action of ["add", "remove"]) {
-    it(`${scope} sender-list ${action} is safe and idempotent`, () => {
-      const name = `proofpoint_essentials_${scope}_sender_list_${action}`;
-      const tool = TOOLS.find(t => t.name === name)!;
-      expect(TOOL_NAMES).toContain(name);
-      expect(tool.annotations).toEqual({ readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true });
-      const anchor = scope === "users" ? "proofpoint_essentials_users_delete" : "proofpoint_essentials_org_delete";
-      expect(TOOL_NAMES.indexOf(name)).toBe(TOOL_NAMES.indexOf(anchor) + (action === "add" ? 1 : 2));
+describe("sender-list tools", () => {
+  const groups = [
+    { scope: "org", anchor: "proofpoint_essentials_org_delete" },
+    { scope: "users", anchor: "proofpoint_essentials_users_delete" },
+  ];
+  const variants = [
+    { list: "block", action: "add" },
+    { list: "block", action: "remove" },
+    { list: "allow", action: "add" },
+    { list: "allow", action: "remove" },
+  ];
+
+  for (const { scope, anchor } of groups) {
+    variants.forEach(({ list, action }, offset) => {
+      const name = `proofpoint_essentials_${scope}_${list}_list_${action}`;
+      const routine = list === "block" && action === "add";
+      describe(name, () => {
+        const tool = () => TOOLS.find((t) => t.name === name)!;
+
+        it("sits directly after the delete tool of its resource, in block/allow add/remove order", () => {
+          expect(TOOL_NAMES.indexOf(name)).toBe(TOOL_NAMES.indexOf(anchor) + 1 + offset);
+        });
+
+        it("takes orgDomain, email (users only) and 1-100 bounded entries, with no list argument", () => {
+          const { properties, required } = tool().inputSchema;
+          expect(Object.keys(properties!).sort()).toEqual(
+            scope === "users" ? ["email", "entries", "orgDomain"] : ["entries", "orgDomain"]
+          );
+          expect([...required!].sort()).toEqual(Object.keys(properties!).sort());
+          expect(properties!.entries).toMatchObject({
+            type: "array", minItems: 1, maxItems: 100,
+            items: { type: "string", minLength: 1, maxLength: 320 },
+          });
+        });
+
+        if (routine) {
+          it("is a plain, idempotent, non-destructive write for unattended automation", () => {
+            expect(tool().annotations).toEqual({
+              readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true,
+            });
+            expect(tool().description).not.toContain("⚠");
+            expect(tool().description).not.toContain("Confirm with the user");
+            expect(tool().description).toContain("block list only");
+            expect(tool().description).toContain("allow list");
+          });
+        } else {
+          it("is Tier B high-impact with a stated reason", () => {
+            expect(tool().annotations).toEqual({
+              readOnlyHint: false, destructiveHint: true, idempotentHint: true, openWorldHint: true,
+            });
+            expect(tool().description).toMatch(/^⚠ HIGH-IMPACT\./);
+            expect(tool().description).toMatch(/Confirm with the user before invoking\.$/);
+            expect(tool().description).toMatch(/bypass spam filtering|re-admits a blocked sender|back through filtering/);
+          });
+        }
+      });
     });
   }
-}
+
+  it("replaces the old list-argument tools", () => {
+    expect(TOOL_NAMES.filter((name) => name.includes("sender_list"))).toEqual([]);
+  });
+
+  it("users_update description points at the list tools and says it read-merges", () => {
+    const description = TOOLS.find((t) => t.name === "proofpoint_essentials_users_update")!.description;
+    expect(description).toMatch(/^⚠ HIGH-IMPACT\./);
+    expect(description).toMatch(/Confirm with the user before invoking\.$/);
+    expect(description).toContain("merges");
+    expect(description).toContain("block/allow list tools");
+  });
+});

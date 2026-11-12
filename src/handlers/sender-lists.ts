@@ -1,79 +1,190 @@
-/** Safe read/modify/PATCH operations on dedicated sender-list resources. */
+/**
+ * Block/allow list changes on the dedicated sender-lists resources: read, change
+ * one list, write, re-read to verify. Not atomic; the last writer wins.
+ */
 import { isIPv4 } from "node:net";
 import type { ProofpointEssentialsClient, SenderLists } from "@wyre-ai/node-proofpoint-essentials";
 import {
+  errorResult,
   jsonResult,
   requireEmailSegment,
   requirePathSegment,
-  requireString,
   requireStringArray,
   ToolInputError,
   type ToolResult,
 } from "./results.js";
 
-/** Validate supported sender entries without whitespace or injection characters. */
-function validEntry(entry: string): boolean {
-  if (!entry || /[\s<>"']/.test(entry) || [...entry].some(char => {
-    const code = char.charCodeAt(0);
-    return code < 32 || (code >= 127 && code <= 159);
-  })) return false;
-  const host = "(?:[a-z0-9*](?:[a-z0-9*-]*[a-z0-9*])?\\.)+[a-z0-9*](?:[a-z0-9*-]*[a-z0-9*])?";
-  if (new RegExp(`^(?:[a-z0-9.!#$%&*+/=?^_\x60{|}~-]+@)?${host}$`, "i").test(entry)) {
-    // Numeric addresses and CIDRs must pass IPv4 validation below.
-    if (!/^[\d.]+$/.test(entry)) return true;
+const MAX_ENTRIES = 100;
+const LOCAL_PART = /^[a-z0-9.!#$%&*+/=?^_`{|}~-]{1,64}$/i;
+const DOMAIN_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
+
+type Lists = Required<SenderLists>;
+
+function domainProblem(host: string): string | null {
+  if (host.length > 253) return "domain must be at most 253 characters";
+  const labels = host.split(".");
+  if (labels.some((label) => label.includes("*"))) {
+    return "host wildcards are not supported; list the domain itself";
   }
-  if (/^[a-z0-9.!#$%&*+/=?^_`{|}~-]+@[a-z0-9*-]+$/i.test(entry)) return true;
-  const [ip, prefix, ...extra] = entry.split("/");
-  return isIPv4(ip) && extra.length === 0 &&
-    (prefix === undefined || /^(?:[0-9]|[12][0-9]|3[0-2])$/.test(prefix));
+  if (labels.length < 2) return "domain needs at least two labels separated by dots";
+  if (labels.some((label) => label.length > 63 || !DOMAIN_LABEL.test(label))) {
+    return "each domain label must be 1 to 63 ASCII letters, digits or hyphens, and must not start or end with a hyphen";
+  }
+  if (!/^[a-z]/i.test(labels[labels.length - 1])) return "the domain's last label must start with a letter";
+  return null;
 }
 
-/** Validate and copy both lists before modifying the dedicated resource. */
-function snapshot(lists: SenderLists): Required<SenderLists> {
-  for (const key of ["allow_list", "block_list"] as const) {
-    if (lists[key] !== undefined && (!Array.isArray(lists[key]) || !lists[key]!.every(v => typeof v === "string"))) {
-      throw new ToolInputError("Existing sender lists could not be read safely; refusing update.");
+function cidrProblem(entry: string): string | null {
+  const [ip, prefix, ...extra] = entry.split("/");
+  if (extra.length > 0 || !isIPv4(ip) || !/^\d{1,3}$/.test(prefix)) {
+    return "CIDR must be a valid IPv4 address, a slash, and a prefix";
+  }
+  if (Number(prefix) > 32) return "CIDR prefix must be between 24 and 32";
+  if (Number(prefix) < 24) return "ranges larger than /24 are not allowed";
+  return null;
+}
+
+/** Only a.b.c.* and a.b.*.* with numeric octets are supported wildcards. */
+function ipv4WildcardProblem(entry: string): string | null {
+  const [a, b, c, d, ...extra] = entry.split(".");
+  const octet = (part: string | undefined) => /^\d{1,3}$/.test(part ?? "") && Number(part) <= 255;
+  return extra.length === 0 && d === "*" && octet(a) && octet(b) && (c === "*" || octet(c))
+    ? null
+    : "IPv4 wildcards must be a.b.c.* or a.b.*.* with numbers from 0 to 255";
+}
+
+/** Why an entry is not a supported sender entry, or null when it is valid. */
+function entryProblem(entry: string): string | null {
+  if (entry.length < 1 || entry.length > 320) return "entry must be 1 to 320 characters";
+  if (/[\s<>"']|\p{Cc}/u.test(entry)) {
+    return "entry must not contain whitespace, control characters, or any of < > \" '";
+  }
+  if (entry.includes(":")) return "IPv6 entries are not supported";
+  const at = entry.lastIndexOf("@");
+  if (at >= 0) {
+    return LOCAL_PART.test(entry.slice(0, at))
+      ? domainProblem(entry.slice(at + 1))
+      : "email local part must be 1 to 64 characters from a-z, 0-9 and . ! # $ % & * + / = ? ^ _ ` { | } ~ -";
+  }
+  if (entry.includes("/")) return cidrProblem(entry);
+  if (/^[\d.*]+$/.test(entry)) {
+    if (entry.includes("*")) return ipv4WildcardProblem(entry);
+    return isIPv4(entry) ? null : "not a valid IPv4 address";
+  }
+  return domainProblem(entry);
+}
+
+/** Validated entries, de-duplicated case-insensitively with the first spelling winning. */
+function requireEntries(args: Record<string, unknown>): string[] {
+  const unique = new Map<string, string>();
+  for (const entry of requireStringArray(args, "entries")) {
+    const key = entry.toLowerCase();
+    if (!unique.has(key)) unique.set(key, entry);
+  }
+  const entries = [...unique.values()];
+  if (entries.length > MAX_ENTRIES) {
+    throw new ToolInputError(`entries must contain at most ${MAX_ENTRIES} distinct entries; got ${entries.length}.`);
+  }
+  for (const entry of entries) {
+    const problem = entryProblem(entry);
+    if (problem !== null) {
+      throw new ToolInputError(`Invalid entry ${JSON.stringify(entry.slice(0, 80))}: ${problem}`);
     }
   }
-  return { allow_list: [...(lists.allow_list ?? [])], block_list: [...(lists.block_list ?? [])] };
+  return entries;
 }
 
-/** GET-merge-PATCH sender entries, removing opposite-list matches on add. */
+/** Copy a sender-lists response, refusing anything that is not clearly a pair of string lists. */
+function snapshot(value: unknown): Lists {
+  const unreadable = () => new ToolInputError("Existing sender lists could not be read safely; refusing update.");
+  if (value === null || typeof value !== "object" || Array.isArray(value)) throw unreadable();
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).length > 0 && !("allow_list" in record) && !("block_list" in record)) throw unreadable();
+  const read = (key: "allow_list" | "block_list"): string[] => {
+    const list = record[key];
+    if (list === undefined) return [];
+    if (!Array.isArray(list) || !list.every((item) => typeof item === "string")) throw unreadable();
+    return [...list];
+  };
+  return { allow_list: read("allow_list"), block_list: read("block_list") };
+}
+
+const includesEntry = (list: string[], entry: string) =>
+  list.some((item) => item.toLowerCase() === entry.toLowerCase());
+
+/** Read the lists, add or remove entries on one list, write both, then re-read to verify. */
 export async function changeSenderList(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>,
   scope: "user" | "org",
+  list: "allow" | "block",
   action: "add" | "remove"
 ): Promise<ToolResult> {
   const orgDomain = requirePathSegment(args, "orgDomain");
   const email = scope === "user" ? requireEmailSegment(args, "email") : undefined;
-  const list = requireString(args, "list");
-  if (list !== "allow" && list !== "block") throw new ToolInputError('list must be "allow" or "block".');
-  const entries = requireStringArray(args, "entries");
-  if (!entries.every(validEntry)) throw new ToolInputError("entries must contain valid emails, domains, IPv4 addresses, CIDRs, or Proofpoint wildcards without whitespace, control characters, or injection characters.");
-  const before = snapshot(email === undefined
-    ? await client.senderLists.getOrg(orgDomain)
-    : await client.senderLists.getUser(orgDomain, email));
-  const after = snapshot(before);
+  const entries = requireEntries(args);
   const target = list === "allow" ? "allow_list" : "block_list";
   const opposite = list === "allow" ? "block_list" : "allow_list";
-  const changed: string[] = [];
-  const skipped: string[] = [];
-  for (const entry of entries) {
-    const matches = (value: string) => value.toLowerCase() === entry.toLowerCase();
-    const present = after[target].some(matches);
-    if (action === "add") {
-      if (present) skipped.push(entry);
-      else { after[target].push(entry); changed.push(entry); }
-      after[opposite] = after[opposite].filter(value => !matches(value));
-    } else if (present) {
-      after[target] = after[target].filter(value => !matches(value));
-      changed.push(entry);
-    } else skipped.push(entry);
+
+  const read = async () => snapshot(email === undefined
+    ? await client.senderLists.getOrg(orgDomain)
+    : await client.senderLists.getUser(orgDomain, email));
+  const before = await read();
+
+  const present = entries.filter((entry) => includesEntry(before[target], entry));
+  const absent = entries.filter((entry) => !includesEntry(before[target], entry));
+  const changes = action === "add" ? absent : present;
+  const skipped = action === "add" ? present : absent;
+
+  const report = (now: Lists, written: boolean) => ({
+    orgDomain,
+    ...(email === undefined ? {} : { email }),
+    list,
+    changed: written,
+    ...(written ? { verified: true } : {}),
+    ...(action === "add"
+      ? {
+        added: changes,
+        skipped_already_present: skipped,
+        [`also_on_${opposite}`]: entries.filter((entry) => includesEntry(before[opposite], entry)),
+      }
+      : { removed: changes, skipped_not_present: skipped }),
+    counts: { allow_list: now.allow_list.length, block_list: now.block_list.length },
+    ...(now[target].length <= MAX_ENTRIES ? { entries: now[target] } : { entries_omitted: true }),
+  });
+
+  if (changes.length === 0) return jsonResult(report(before, false));
+
+  const changed = new Set(changes.map((entry) => entry.toLowerCase()));
+  const updated = action === "add"
+    ? [...before[target], ...changes]
+    : before[target].filter((item) => !changed.has(item.toLowerCase()));
+  // Whether PATCH merges or replaces is unverified against a live account.
+  // Sending both lists (the target as modified, the other exactly as read) is
+  // correct under either behaviour.
+  const lists: Lists = { ...before, [target]: updated };
+  if (email === undefined) await client.senderLists.updateOrg(orgDomain, lists, "PATCH");
+  else await client.senderLists.updateUser(orgDomain, email, lists, "PATCH");
+
+  let after: Lists;
+  try {
+    after = await read();
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return errorResult(`Sender-list write could not be confirmed: the lists could not be re-read (${reason}). Check the current lists before retrying.`);
   }
-  if (email === undefined) await client.senderLists.updateOrg(orgDomain, after, "PATCH");
-  else await client.senderLists.updateUser(orgDomain, email, after, "PATCH");
-  return jsonResult({ orgDomain, ...(email === undefined ? {} : { email }), list,
-    ...(action === "add" ? { added: changed, skipped_already_present: skipped }
-      : { removed: changed, skipped_not_present: skipped }), before, after });
+  const problems: string[] = [];
+  const wrong = changes.filter((entry) => includesEntry(after[target], entry) !== (action === "add"));
+  if (wrong.length > 0) {
+    problems.push(`${action === "add" ? "added entries missing from" : "removed entries still on"} the ${list} list: ${wrong.join(", ")}`);
+  }
+  const missing = before[opposite].filter((item) => !includesEntry(after[opposite], item));
+  const unexpected = after[opposite].filter((item) => !includesEntry(before[opposite], item));
+  if (missing.length > 0 || unexpected.length > 0) {
+    problems.push(`the ${opposite.replace("_list", "")} list changed (missing: ${missing.join(", ") || "none"}; unexpected: ${unexpected.join(", ") || "none"})`);
+  }
+  if (problems.length > 0) {
+    return errorResult(`Sender-list write could not be confirmed on re-read: ${problems.join("; ")}. The change may be partly applied; check the current lists.`);
+  }
+  return jsonResult(report(after, true));
 }

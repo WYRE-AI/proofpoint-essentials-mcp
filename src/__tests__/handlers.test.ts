@@ -461,59 +461,301 @@ describe("delete confirmations (MRTR-safe: reads first, DELETE last)", () => {
   });
 });
 
-describe("safe sender lists", () => {
-  for (const scope of ["users", "orgs"] as const) {
-    const args = { orgDomain: "example.com", ...(scope === "users" ? { email: "user@example.com" } : {}), list: "allow", entries: ["NEW@example.com"] };
-    const get = scope === "users" ? "getUser" : "getOrg";
-    const update = scope === "users" ? "updateUser" : "updateOrg";
-    const prefix = scope === "users" ? ["example.com", "user@example.com"] : ["example.com"];
-    function fixture(allow_list: string[] = [], block_list: string[] = []) {
-      return stubClient({ senderLists: {
-        [get]: vi.fn().mockResolvedValue({ allow_list, block_list }),
-        [update]: vi.fn().mockResolvedValue(undefined),
-      } });
-    }
-    async function call(client: ProofpointEssentialsClient, action: string, overrides = {}) {
-      return asTool(await handleToolCall(client, `proofpoint_essentials_${scope}_sender_list_${action}`, { ...args, ...overrides }));
-    }
-    it(`${scope}: merges and preserves the other list verbatim`, async () => {
-      const client = fixture(["old@example.com"], ["BLOCK.example.com"]);
-      const result = await call(client, "add");
-      expect(client.senderLists[update]).toHaveBeenCalledWith(...prefix, { allow_list: ["old@example.com", "NEW@example.com"], block_list: ["BLOCK.example.com"] }, "PATCH");
-      expect(JSON.parse(result.content[0].text)).toMatchObject({ added: ["NEW@example.com"], before: { allow_list: ["old@example.com"] } });
+const SENDER_UNREADABLE = "Existing sender lists could not be read safely; refusing update.";
+
+type ListsBehaviour = "merge" | "replace" | "ignore" | "drop-allow-list";
+
+/**
+ * A stateful fake of the sender-lists resource. "merge" and "replace" are the two
+ * possible PATCH semantics; "ignore" drops the write; "drop-allow-list" merges
+ * but also wipes the allow list.
+ */
+function senderListsClient(scope: "org" | "users", initial: unknown, behaviour: ListsBehaviour = "merge") {
+  let state: unknown = structuredClone(initial);
+  const listsIndex = scope === "users" ? 2 : 1;
+  const get = vi.fn().mockImplementation(async () => structuredClone(state));
+  const update = vi.fn().mockImplementation(async (...callArgs: unknown[]) => {
+    const lists = structuredClone(callArgs[listsIndex]) as Record<string, unknown>;
+    const current = state !== null && typeof state === "object" ? state : {};
+    if (behaviour === "merge") state = { ...current, ...lists };
+    else if (behaviour === "replace") state = lists;
+    else if (behaviour === "drop-allow-list") state = { ...current, ...lists, allow_list: [] };
+  });
+  const client = stubClient({
+    senderLists: scope === "users" ? { getUser: get, updateUser: update } : { getOrg: get, updateOrg: update },
+  });
+  return { client, get, update };
+}
+
+describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) => {
+  const target = { orgDomain: "example.com", ...(scope === "users" ? { email: "user@example.com" } : {}) };
+  const prefix = scope === "users" ? ["example.com", "user@example.com"] : ["example.com"];
+  async function run(
+    client: ProofpointEssentialsClient, list: "block" | "allow", action: "add" | "remove",
+    entries: unknown, extra: Record<string, unknown> = {}
+  ) {
+    return asTool(await handleToolCall(
+      client, `proofpoint_essentials_${scope}_${list}_list_${action}`, { ...target, entries, ...extra }
+    ));
+  }
+  const body = (result: ToolResult) => JSON.parse(result.content[0].text);
+
+  describe.each(["merge", "replace"] as const)("PATCH behaves as %s", (behaviour) => {
+    it("block add appends, sends both lists once, verifies, and leaves the allow list alone", async () => {
+      const { client, get, update } = senderListsClient(scope, {
+        allow_list: ["Keep@example.com"], block_list: ["old.example.com"],
+      }, behaviour);
+      const result = await run(client, "block", "add", ["new.example.com"]);
+      expect(result.isError).toBeUndefined();
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledWith(...prefix, {
+        allow_list: ["Keep@example.com"], block_list: ["old.example.com", "new.example.com"],
+      }, "PATCH");
+      expect(get).toHaveBeenCalledTimes(2);
+      expect(body(result)).toEqual({
+        orgDomain: "example.com", ...(scope === "users" ? { email: "user@example.com" } : {}),
+        list: "block", changed: true, verified: true,
+        added: ["new.example.com"], skipped_already_present: [], also_on_allow_list: [],
+        counts: { allow_list: 1, block_list: 2 },
+        entries: ["old.example.com", "new.example.com"],
+      });
       expect(client.users.update).not.toHaveBeenCalled();
       expect(client.orgs.delete).not.toHaveBeenCalled();
     });
-    it(`${scope}: is case-insensitively idempotent and moves opposite entries`, async () => {
-      const client = fixture(["new@example.com"], ["NEW@example.com", "keep.example.com"]);
-      const result = await call(client, "add");
-      expect(JSON.parse(result.content[0].text)).toMatchObject({ added: [], skipped_already_present: ["NEW@example.com"], after: { allow_list: ["new@example.com"], block_list: ["keep.example.com"] } });
-    });
-    it(`${scope}: moves a newly added entry off the opposite list`, async () => {
-      const result = await call(fixture([], ["new@example.com"]), "add");
-      expect(JSON.parse(result.content[0].text)).toMatchObject({ added: ["NEW@example.com"], after: { allow_list: ["NEW@example.com"], block_list: [] } });
-    });
-    it(`${scope}: removes case-insensitively and reports missing entries`, async () => {
-      const result = await call(fixture(["new@example.com"], ["keep.example.com"]), "remove", { entries: ["NEW@example.com", "missing.example.com"] });
-      expect(JSON.parse(result.content[0].text)).toMatchObject({ removed: ["NEW@example.com"], skipped_not_present: ["missing.example.com"], after: { allow_list: [], block_list: ["keep.example.com"] } });
-    });
-    it(`${scope}: handles block lists, missing lists, wildcards and CIDRs`, async () => {
-      const client = fixture();
-      vi.mocked(client.senderLists[get]).mockResolvedValue({});
-      const entries = ["*@example.com", "10.91.*.*", "192.0.2.1", "192.0.2.0/24", "local@domain", "bad.example.com"];
-      const result = await call(client, "add", { list: "block", entries });
-      expect(JSON.parse(result.content[0].text)).toMatchObject({ after: { allow_list: [], block_list: entries } });
-    });
-    for (const entries of [[], [""], [" "], ["bad\n.example.com"], ['<bad>'], ['a"@example.com'], ["a'@example.com"], ["not a domain"], ["999.999.999.999"], ["192.0.2.0/33"], [123]]) {
-      it(`${scope}: rejects ${JSON.stringify(entries)} before calling the client`, async () => {
-        const client = fixture();
-        expect((await call(client, "add", { entries })).isError).toBe(true);
-        expect(client.senderLists[get]).not.toHaveBeenCalled();
-        expect(client.senderLists[update]).not.toHaveBeenCalled();
+
+    it("allow add appends to the allow list and leaves the block list alone", async () => {
+      const { client, update } = senderListsClient(scope, {
+        allow_list: [], block_list: ["Blocked.example.com"],
+      }, behaviour);
+      const result = await run(client, "allow", "add", ["ok@example.com"]);
+      expect(update).toHaveBeenCalledWith(...prefix, {
+        allow_list: ["ok@example.com"], block_list: ["Blocked.example.com"],
+      }, "PATCH");
+      expect(body(result)).toMatchObject({
+        list: "allow", changed: true, verified: true, added: ["ok@example.com"],
+        also_on_block_list: [], counts: { allow_list: 1, block_list: 1 }, entries: ["ok@example.com"],
       });
-    }
-  }
+    });
+
+    it("remove deletes every case variant from the target list only", async () => {
+      const { client, update } = senderListsClient(scope, {
+        allow_list: ["x@example.com"], block_list: ["x@example.com", "X@Example.com", "keep.example.com"],
+      }, behaviour);
+      const result = await run(client, "block", "remove", ["X@example.com", "missing.example.com"]);
+      expect(update).toHaveBeenCalledWith(...prefix, {
+        allow_list: ["x@example.com"], block_list: ["keep.example.com"],
+      }, "PATCH");
+      expect(body(result)).toEqual({
+        orgDomain: "example.com", ...(scope === "users" ? { email: "user@example.com" } : {}),
+        list: "block", changed: true, verified: true,
+        removed: ["X@example.com"], skipped_not_present: ["missing.example.com"],
+        counts: { allow_list: 1, block_list: 1 }, entries: ["keep.example.com"],
+      });
+    });
+  });
+
+  it("de-duplicates entries case-insensitively with the first spelling winning", async () => {
+    const { client, update } = senderListsClient(scope, { allow_list: [], block_list: [] });
+    const result = await run(client, "block", "add", ["A@example.com", "a@EXAMPLE.com", "b@example.com"]);
+    expect(body(result).added).toEqual(["A@example.com", "b@example.com"]);
+    expect(update.mock.calls[0][prefix.length]).toEqual({ allow_list: [], block_list: ["A@example.com", "b@example.com"] });
+  });
+
+  it("add skips entries already present (case-insensitive) and makes no write when nothing changes", async () => {
+    const { client, get, update } = senderListsClient(scope, { allow_list: [], block_list: ["new@example.com"] });
+    const result = await run(client, "block", "add", ["NEW@example.com"]);
+    expect(result.isError).toBeUndefined();
+    expect(update).not.toHaveBeenCalled();
+    expect(get).toHaveBeenCalledTimes(1);
+    const payload = body(result);
+    expect(payload).toMatchObject({
+      changed: false, added: [], skipped_already_present: ["NEW@example.com"],
+      counts: { allow_list: 0, block_list: 1 }, entries: ["new@example.com"],
+    });
+    expect(payload).not.toHaveProperty("verified");
+  });
+
+  it("remove makes no write when no entry is present", async () => {
+    const { client, update } = senderListsClient(scope, { allow_list: ["a@example.com"], block_list: [] });
+    const result = await run(client, "allow", "remove", ["other@example.com"]);
+    expect(update).not.toHaveBeenCalled();
+    expect(body(result)).toMatchObject({
+      changed: false, removed: [], skipped_not_present: ["other@example.com"],
+    });
+  });
+
+  it("block add reports entries that are also on the allow list without changing it", async () => {
+    const { client, update } = senderListsClient(scope, {
+      allow_list: ["trusted@example.com"], block_list: [],
+    });
+    const result = await run(client, "block", "add", ["Trusted@example.com", "other@example.com"]);
+    expect(update).toHaveBeenCalledWith(...prefix, {
+      allow_list: ["trusted@example.com"], block_list: ["Trusted@example.com", "other@example.com"],
+    }, "PATCH");
+    expect(body(result)).toMatchObject({ also_on_allow_list: ["Trusted@example.com"], verified: true });
+  });
+
+  it("allow add reports entries that are also on the block list without changing it", async () => {
+    const { client, update } = senderListsClient(scope, { allow_list: [], block_list: ["bad@example.com"] });
+    const result = await run(client, "allow", "add", ["BAD@example.com"]);
+    expect(update).toHaveBeenCalledWith(...prefix, {
+      allow_list: ["BAD@example.com"], block_list: ["bad@example.com"],
+    }, "PATCH");
+    expect(body(result)).toMatchObject({ also_on_block_list: ["BAD@example.com"] });
+  });
+
+  it("treats an empty object as two empty lists and a single present list as the other being empty", async () => {
+    const empty = senderListsClient(scope, {});
+    expect(body(await run(empty.client, "block", "add", ["a.example.com"]))).toMatchObject({
+      verified: true, counts: { allow_list: 0, block_list: 1 },
+    });
+    const partial = senderListsClient(scope, { block_list: ["b.example.com"] });
+    expect(body(await run(partial.client, "block", "add", ["a.example.com"]))).toMatchObject({
+      verified: true, counts: { allow_list: 0, block_list: 2 },
+    });
+  });
+
+  it("returns entries only up to 100 and otherwise sets entries_omitted", async () => {
+    const existing = Array.from({ length: 99 }, (_, i) => `d${i}.example.com`);
+    const small = senderListsClient(scope, { allow_list: [], block_list: existing });
+    const at100 = body(await run(small.client, "block", "add", ["extra.example.com"]));
+    expect(at100.entries).toHaveLength(100);
+    expect(at100).not.toHaveProperty("entries_omitted");
+    const large = senderListsClient(scope, { allow_list: [], block_list: [...existing, "x.example.com"] });
+    const at101 = body(await run(large.client, "block", "add", ["extra.example.com"]));
+    expect(at101).not.toHaveProperty("entries");
+    expect(at101).toMatchObject({ entries_omitted: true, counts: { allow_list: 0, block_list: 101 } });
+  });
+
+  describe("fails closed when the write cannot be confirmed", () => {
+    it("reports an error when the target change is not visible on re-read", async () => {
+      const { client, update } = senderListsClient(scope, { allow_list: [], block_list: [] }, "ignore");
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("could not be confirmed");
+      expect(result.content[0].text).toContain("a.example.com");
+    });
+    it("reports an error when a removed entry is still present", async () => {
+      const { client } = senderListsClient(scope, { allow_list: ["a@example.com"], block_list: [] }, "ignore");
+      const result = await run(client, "allow", "remove", ["a@example.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("could not be confirmed");
+    });
+    it("reports an error when the opposite list changed", async () => {
+      const { client } = senderListsClient(scope, {
+        allow_list: ["keep.example.com"], block_list: [],
+      }, "drop-allow-list");
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("could not be confirmed");
+      expect(result.content[0].text).toContain("allow");
+      expect(result.content[0].text).toContain("keep.example.com");
+    });
+    it("reports an error when the re-read is unreadable", async () => {
+      const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      get.mockResolvedValueOnce({ allow_list: [], block_list: [] }).mockResolvedValueOnce(null);
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("could not be confirmed");
+    });
+  });
+
+  describe("fails closed when the existing lists cannot be read safely", () => {
+    it.each([
+      ["null", null],
+      ["a string", "lists"],
+      ["an array", []],
+      ["an object with unrelated keys", { error: "boom" }],
+      ["a non-array allow_list", { allow_list: "a@example.com", block_list: [] }],
+      ["a non-string entry", { allow_list: [], block_list: [1] }],
+      ["a non-array block_list", { allow_list: [], block_list: { a: 1 } }],
+    ])("%s", async (_name, initial) => {
+      const { client, update } = senderListsClient(scope, initial);
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(SENDER_UNREADABLE);
+      expect(update).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("entry validation", () => {
+    const accepted = [
+      "user@example.com", "example.com", "sub.example.co.uk", "*@example.com", "10.91.*.*",
+      "192.168.1.*", "192.168.1.10", "192.168.1.0/24", "10.1.2.3/32", "a/b@example.com",
+      "xn--bcher-kva.example", "a-b.example.com", "1.2.3.4.example.com",
+    ];
+    it.each(accepted)("accepts %s", async (entry) => {
+      const { client, update } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      const result = await run(client, "block", "add", [entry]);
+      expect(result.isError).toBeUndefined();
+      expect(update).toHaveBeenCalledTimes(1);
+    });
+
+    const rejected: Array<[string, string]> = [
+      ["*.*", "wildcard"], ["*@*.*", "wildcard"], ["*@*", "domain"], ["*.com", "wildcard"],
+      ["*.co.uk", "wildcard"], ["*.example.com", "wildcard"], ["*@*.com", "wildcard"],
+      ["a@*", "domain"], ["*@a", "domain"], ["*", "wildcard"], ["*.*.*.*", "wildcard"],
+      ["10.*.*.*", "wildcard"], ["10.*.1.1", "wildcard"], ["256.1.1.*", "wildcard"],
+      ["0.0.0.0/0", "larger than /24"], ["10.0.0.0/8", "larger than /24"], ["10.0.0.0/23", "larger than /24"],
+      ["10.0.0.0/33", "prefix"], ["10.0.0.0/24/1", "CIDR"], ["10.0.0/24", "CIDR"], ["999.0.0.0/24", "CIDR"],
+      ["2001:db8::1", "IPv6"], ["[::1]", "IPv6"], ["user@[2001:db8::1]", "IPv6"],
+      ["a@b", "domain"], ["foo.123", "domain"], ["user@192.168.1.1", "domain"],
+      ["999.999.999.999", "IPv4"], ["10.91", "IPv4"],
+      ["a".repeat(64) + ".example.com", "label"], ["-a.example.com", "label"], ["a-.example.com", "label"],
+      ["a..example.com", "label"], ["example.com.", "label"], ["exa_mple.com", "label"],
+      [[..."aaa"].map(() => "a".repeat(63)).concat("a".repeat(62)).join("."), "253"],
+      ["a".repeat(321), "320"], ["a".repeat(65) + "@example.com", "local part"], ["@example.com", "local part"],
+      ["a@@example.com", "local part"], ["not a domain", "whitespace"], [" ", "whitespace"],
+      ["bad\n.example.com", "control"], ["<bad>", "<"], ['a"@example.com', "<"], ["a'@example.com", "<"],
+    ];
+    it.each(rejected)("rejects %j (%s) before any vendor call", async (entry, reason) => {
+      const { client, get, update } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      const result = await run(client, "block", "add", [entry]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(reason);
+      expect(get).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+    });
+
+    it("names the offending entry JSON-quoted and cut to 80 characters", async () => {
+      const { client } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      const long = "!".repeat(81);
+      const result = await run(client, "block", "add", ["ok.example.com", long]);
+      expect(result.content[0].text).toContain(JSON.stringify("!".repeat(80)));
+      expect(result.content[0].text).not.toContain("!".repeat(81));
+      expect((await run(client, "block", "add", ["*.*"])).content[0].text).toContain('"*.*"');
+    });
+
+    it("explains that IPv6, host wildcards and large ranges are unsupported", async () => {
+      const { client } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      const text = async (entry: string) => (await run(client, "block", "add", [entry])).content[0].text;
+      expect(await text("2001:db8::1")).toContain("IPv6 entries are not supported");
+      expect(await text("*.example.com")).toContain("host wildcards are not supported");
+      expect(await text("*.example.com")).toContain("list the domain itself");
+      expect(await text("10.0.0.0/8")).toContain("ranges larger than /24 are not allowed");
+    });
+
+    it.each([
+      ["an empty array", []],
+      ["a non-array", "a.example.com"],
+      ["a non-string item", ["a.example.com", 1]],
+      ["an empty string", [""]],
+      ["101 distinct entries", Array.from({ length: 101 }, (_, i) => `d${i}.example.com`)],
+    ])("rejects %s", async (_name, entries) => {
+      const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      expect((await run(client, "block", "add", entries)).isError).toBe(true);
+      expect(get).not.toHaveBeenCalled();
+    });
+
+    it("accepts 100 entries and counts the limit after de-duplication", async () => {
+      const hundred = Array.from({ length: 100 }, (_, i) => `d${i}.example.com`);
+      const { client } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      expect((await run(client, "block", "add", [...hundred, hundred[0].toUpperCase()])).isError).toBeUndefined();
+    });
+  });
 });
+
 
 /** Every stubbed vendor method has zero calls. */
 function expectNoVendorCalls(client: ProofpointEssentialsClient) {
@@ -525,7 +767,13 @@ function expectNoVendorCalls(client: ProofpointEssentialsClient) {
 describe("path-argument safety", () => {
   const dotted = [".", ".."];
   const unsafe = [...dotted, "a/b", "a\\b", "a?b", "a#b", "a b", " a", "a\tb", "a\u0000b", "a\u007fb"];
+  const senderListCalls = ["org", "users"].flatMap((scope) =>
+    ["block_list_add", "block_list_remove", "allow_list_add", "allow_list_remove"].map((name): [string, Record<string, unknown>, string[]] =>
+      scope === "org"
+        ? [`org_${name}`, { orgDomain: "acme.com", entries: ["a.acme.com"] }, ["orgDomain"]]
+        : [`users_${name}`, { orgDomain: "acme.com", email: "a@acme.com", entries: ["a.acme.com"] }, ["orgDomain", "email"]]));
   const calls: Array<[string, Record<string, unknown>, string[]]> = [
+    ...senderListCalls,
     ["org_get", { domain: "acme.com" }, ["domain"]],
     ["org_set_active", { domain: "acme.com", isActive: true }, ["domain"]],
     ["org_delete", { domain: "acme.com", [CONFIRM_ARG]: true }, ["domain"]],
@@ -701,8 +949,7 @@ describe("users_update always read-merges the existing record", () => {
   });
 
   it("proceeds without an existing type when a type is supplied", async () => {
-    const { type: _type, ...noType } = existing;
-    const client = clientWith(noType);
+    const client = clientWith({ ...existing, type: undefined });
     await update(client, { data: { type: "end_user" } });
     expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
       role: "admin", primary_email: "user@example.com", firstname: "Example", surname: "Original",
