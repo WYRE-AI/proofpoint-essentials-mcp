@@ -6,14 +6,18 @@ import {
   batchCreateResult,
   errorResult,
   jsonResult,
-  requireObject,
   requireEmailSegment,
+  requireObject,
   requireObjectArray,
   requirePathSegment,
   requireString,
   textResult,
+  ToolInputError,
   type ToolResult,
 } from "./results.js";
+
+/** Fields Proofpoint returns but does not accept back on a write. */
+const RESPONSE_ONLY_FIELDS = ["uid", "creation_date", "last_update", "last_login", "password"];
 
 export async function listUsers(
   client: ProofpointEssentialsClient,
@@ -54,46 +58,61 @@ export async function createUsers(
   }
   const inputs: ProofpointUserInput[] = users.map((user) => {
     const input = { ...user } as ProofpointUserInput;
-    for (const field of ["uid", "creation_date", "last_update", "last_login", "password"]) {
-      delete input[field];
-    }
+    for (const field of RESPONSE_ONLY_FIELDS) delete input[field];
     return input;
   });
   const results: BatchItemResult[] = await client.users.create(orgDomain, inputs);
   return batchCreateResult("user", results, inputs.length);
 }
 
-/** Update a user, preserving GET fields when account type is omitted. */
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === "object" && !Array.isArray(value);
+
+/**
+ * users.get filters the list endpoint by email, so the response may be a bare
+ * array, a {users: [...]} object, or a single user. Return the user whose
+ * primary_email matches, or undefined when none does.
+ */
+function findUser(response: unknown, email: string): Record<string, unknown> | undefined {
+  const candidates = Array.isArray(response) ? response
+    : isRecord(response) && Array.isArray(response.users) ? response.users
+    : [response];
+  return candidates.find((candidate): candidate is Record<string, unknown> =>
+    isRecord(candidate) && typeof candidate.primary_email === "string" &&
+    candidate.primary_email.toLowerCase() === email.toLowerCase());
+}
+
+/**
+ * Update a user. PUT may replace the whole record, so always read the existing
+ * user first and send it back in full with the supplied fields on top.
+ */
 export async function updateUser(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const orgDomain = requirePathSegment(args, "orgDomain");
   const email = requireEmailSegment(args, "email");
-  const data = requireObject(args, "data");
-  let body = Object.fromEntries(Object.entries(data).filter(([, value]) => value !== null && value !== undefined));
-  const supplied = (field: string) => Object.hasOwn(body, field)
-    && (typeof body[field] !== "string" || body[field].trim() !== "");
+  const data = Object.fromEntries(
+    Object.entries(requireObject(args, "data")).filter(([, value]) => value !== null && value !== undefined)
+  );
+  if (Object.keys(data).length === 0) {
+    throw new ToolInputError('Argument "data" must contain at least one field with a value.');
+  }
   for (const field of ["type", "role"]) {
-    if (!supplied(field)) delete body[field];
+    if (!(field in data)) continue;
+    if (typeof data[field] !== "string") throw new ToolInputError(`"data.${field}" must be a string.`);
+    if (data[field].trim() === "") delete data[field]; // blank means omitted
   }
-  if (!supplied("type")) {
-    const existing = await client.users.get(orgDomain, email);
-    if (typeof existing.type !== "string" || existing.type.trim() === "") {
-      return errorResult("Update refused: existing account type/role could not be read reliably; refusing to risk resetting the account to End User.");
-    }
-    // PUT replaces the record, so retain every writable field from GET.
-    const preserved = { ...existing };
-    for (const field of ["uid", "creation_date", "last_update", "last_login", "password"]) {
-      delete preserved[field];
-    }
-    body = {
-      ...preserved,
-      ...body,
-      type: existing.type,
-      ...(existing.role !== undefined && !supplied("role") ? { role: existing.role } : {}),
-    };
+
+  const existing = findUser(await client.users.get(orgDomain, email), email);
+  if (existing === undefined) {
+    return errorResult("Update refused: the existing user record could not be read reliably; nothing was changed.");
   }
+  if (data.type === undefined && (typeof existing.type !== "string" || existing.type.trim() === "")) {
+    return errorResult("Update refused: existing account type/role could not be read reliably; refusing to risk resetting the account to End User.");
+  }
+  const writable = Object.entries(existing).filter(([key]) => !RESPONSE_ONLY_FIELDS.includes(key));
+  const body = { ...Object.fromEntries(writable), ...data };
   const result = await client.users.update(orgDomain, email, body);
   return jsonResult(result);
 }

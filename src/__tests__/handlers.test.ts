@@ -576,68 +576,137 @@ describe("path-argument safety", () => {
   });
 });
 
-describe("user update account type preservation", () => {
+
+describe("users_update always read-merges the existing record", () => {
   const args = { orgDomain: "example.com", email: "user@example.com", data: { surname: "Updated" } };
-  it("merges all existing fields with changes without response-only fields", async () => {
-    const existing = {
-      type: "organization_admin", role: "admin", primary_email: "user@example.com",
-      firstname: "Example", surname: "Original", is_active: false,
-      uid: 1, password: "secret", creation_date: "2025-01-01",
-      last_update: "2025-02-01", last_login: "2025-03-01",
-    };
-    const client = stubClient({ users: { get: vi.fn().mockResolvedValue(existing) } });
-    expect(asTool(await handleToolCall(client, "proofpoint_essentials_users_update", args)).isError).toBeUndefined();
+  const existing = {
+    type: "organization_admin", role: "admin", primary_email: "user@example.com",
+    firstname: "Example", surname: "Original", is_active: false,
+    uid: 1, password: "secret", creation_date: "2025-01-01",
+    last_update: "2025-02-01", last_login: "2025-03-01",
+  };
+  const merged = {
+    type: "organization_admin", role: "admin", primary_email: "user@example.com",
+    firstname: "Example", surname: "Updated", is_active: false,
+  };
+  function clientWith(response: unknown) {
+    return stubClient({ users: { get: vi.fn().mockResolvedValue(response) } });
+  }
+  async function update(client: ProofpointEssentialsClient, overrides: Record<string, unknown> = {}) {
+    return asTool(await handleToolCall(client, "proofpoint_essentials_users_update", { ...args, ...overrides }));
+  }
+
+  it("merges all existing fields with changes without read-only fields", async () => {
+    const client = clientWith(existing);
+    expect((await update(client)).isError).toBeUndefined();
     expect(client.users.get).toHaveBeenCalledWith("example.com", "user@example.com");
-    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
-      type: "organization_admin", role: "admin", primary_email: "user@example.com",
-      firstname: "Example", surname: "Updated", is_active: false,
-    });
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", merged);
     expect(existing).toMatchObject({ uid: 1, password: "secret", surname: "Original" });
   });
-  it("preserves account type while applying a supplied role when type is omitted", async () => {
-    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type: "organization_admin", role: "user" }) } });
-    await handleToolCall(client, "proofpoint_essentials_users_update", {
-      ...args, data: { surname: "Updated", role: "admin" },
-    });
+
+  it("reads the existing user even when type is supplied, and the supplied type wins", async () => {
+    const client = clientWith(existing);
+    await update(client, { data: { type: "end_user" } });
     expect(client.users.get).toHaveBeenCalledWith("example.com", "user@example.com");
     expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
-      type: "organization_admin", role: "admin", surname: "Updated",
+      ...merged, surname: "Original", type: "end_user",
     });
   });
-  for (const field of ["type", "role"]) {
-    it.each([undefined, null, "", "   "])(`preserves account type and role when ${field} is %j`, async (value) => {
-      const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type: "organization_admin", role: "admin" }) } });
-      await handleToolCall(client, "proofpoint_essentials_users_update", {
-        ...args, data: { surname: "Updated", [field]: value },
-      });
-      expect(client.users.get).toHaveBeenCalledWith("example.com", "user@example.com");
+
+  it("applies a supplied role and keeps the existing type", async () => {
+    const client = clientWith({ ...existing, role: "user" });
+    await update(client, { data: { surname: "Updated", role: "admin" } });
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", merged);
+  });
+
+  it("echoes sender-list fields because the PUT may replace the whole record", async () => {
+    const lists = { allow_list: ["a@example.com"], block_list: ["spam.example.com"] };
+    const client = clientWith({ ...existing, ...lists });
+    await update(client);
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", { ...merged, ...lists });
+  });
+
+  describe("response shapes", () => {
+    const other = { primary_email: "other@example.com", type: "end_user", surname: "Other" };
+    it("accepts a flat user object", async () => {
+      const client = clientWith(existing);
+      await update(client);
+      expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", merged);
+    });
+    it("picks the matching user from a {users: [...]} object, ignoring case", async () => {
+      const client = clientWith({ users: [other, { ...existing, primary_email: "User@Example.com" }] });
+      await update(client);
       expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
-        type: "organization_admin", role: "admin", surname: "Updated",
+        ...merged, primary_email: "User@Example.com",
       });
+    });
+    it("picks the matching user from a bare array", async () => {
+      const client = clientWith([other, existing]);
+      await update(client);
+      expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", merged);
+    });
+    it.each([
+      ["a mismatched primary_email", { ...existing, primary_email: "other@example.com" }],
+      ["a flat object without primary_email", { type: "organization_admin", role: "admin" }],
+      ["a users list without the user", { users: [other] }],
+      ["an empty array", []],
+      ["null", null],
+      ["a string", "nope"],
+    ])("refuses on %s and makes no PUT", async (_name, response) => {
+      const client = clientWith(response);
+      const result = await update(client);
+      expect(result.isError).toBe(true);
+      expect(client.users.update).not.toHaveBeenCalled();
+    });
+  });
+
+  it.each([
+    ["empty", {}],
+    ["only null and undefined values", { surname: null, firstname: undefined }],
+  ])("rejects data that is %s before any vendor call", async (_name, data) => {
+    const client = clientWith(existing);
+    const result = await update(client, { data });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("data");
+    expectNoVendorCalls(client);
+  });
+
+  for (const field of ["type", "role"]) {
+    it.each([123, true, ["a"], { a: 1 }])(`rejects a non-string ${field} (%j) before any vendor call`, async (value) => {
+      const client = clientWith(existing);
+      const result = await update(client, { data: { surname: "Updated", [field]: value } });
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain(field);
+      expectNoVendorCalls(client);
+    });
+    it.each([null, undefined, "", "   "])(`treats ${field} %j as omitted and keeps the existing value`, async (value) => {
+      const client = clientWith(existing);
+      await update(client, { data: { surname: "Updated", [field]: value } });
+      expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", merged);
     });
   }
-  it.each([null, undefined])("preserves existing fields when an update value is %j", async (firstname) => {
-    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({
-      type: "organization_admin", role: "admin", firstname: "Example", surname: "Original",
-    }) } });
-    await handleToolCall(client, "proofpoint_essentials_users_update", {
-      ...args, data: { surname: "Updated", firstname, department: "" },
-    });
-    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
-      type: "organization_admin", role: "admin", firstname: "Example", surname: "Updated", department: "",
-    });
+
+  it.each([null, undefined])("keeps existing fields when an update value is %j", async (firstname) => {
+    const client = clientWith(existing);
+    await update(client, { data: { surname: "Updated", firstname, department: "" } });
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", { ...merged, department: "" });
   });
-  it.each([undefined, null, "", "   ", 123])("fails closed when existing type is %j", async (type) => {
-    const client = stubClient({ users: { get: vi.fn().mockResolvedValue({ type, role: "admin" }) } });
-    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_update", args));
+
+  it.each([undefined, null, "", "   ", 123])("fails closed when the existing type is %j and none is supplied", async (type) => {
+    const client = clientWith({ ...existing, type });
+    const result = await update(client);
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain("End User");
     expect(client.users.update).not.toHaveBeenCalled();
   });
-  it("allows an explicit account type without a GET", async () => {
-    const client = stubClient();
-    await handleToolCall(client, "proofpoint_essentials_users_update", { ...args, data: { type: "organization_admin" } });
-    expect(client.users.get).not.toHaveBeenCalled();
-    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", { type: "organization_admin" });
+
+  it("proceeds without an existing type when a type is supplied", async () => {
+    const { type: _type, ...noType } = existing;
+    const client = clientWith(noType);
+    await update(client, { data: { type: "end_user" } });
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", {
+      role: "admin", primary_email: "user@example.com", firstname: "Example", surname: "Original",
+      is_active: false, type: "end_user",
+    });
   });
 });
