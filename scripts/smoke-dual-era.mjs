@@ -235,6 +235,11 @@ async function main() {
     const drift = [...legacyNames].filter((n) => !modernNames.has(n))
       .concat([...modernNames].filter((n) => !legacyNames.has(n)));
     check('both eras serve the same tool names', drift.length === 0, drift.join(', ') || 'no drift');
+    const listTools = ['org', 'users'].flatMap((scope) => ['block', 'allow'].flatMap((list) =>
+      ['add', 'remove'].map((action) => `proofpoint_essentials_${scope}_${list}_list_${action}`)));
+    const missingListTools = listTools.filter((name) => !modernNames.has(name));
+    check('the eight block/allow list tools are served', missingListTools.length === 0,
+      missingListTools.join(', ') || `${listTools.length} present`);
 
     await gatewayLeg(modernTools.length);
   } catch (error) {

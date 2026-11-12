@@ -100,6 +100,31 @@ export function requireString(args: Record<string, unknown>, key: string): strin
   return value;
 }
 
+/**
+ * A string that is safe to place in an upstream URL path. The SDK only applies
+ * encodeURIComponent, which leaves "." and ".." intact, and URL resolution then
+ * collapses them (an email of ".." would reach the org-level path).
+ */
+export function requirePathSegment(args: Record<string, unknown>, key: string): string {
+  const value = requireString(args, key);
+  if (/[\s/\\?#]|\p{Cc}/u.test(value) || value === "." || value === "..") {
+    throw new ToolInputError(
+      `Argument "${key}" must not contain whitespace, control characters, or any of / \\ ? #, and must not be "." or "..".`
+    );
+  }
+  return value;
+}
+
+/** A path segment that is also shaped like an email: "@" with text on each side. */
+export function requireEmailSegment(args: Record<string, unknown>, key: string): string {
+  const value = requirePathSegment(args, key);
+  const at = value.indexOf("@");
+  if (at < 1 || at === value.length - 1) {
+    throw new ToolInputError(`Argument "${key}" must be an email address with a local part, an at sign and a domain.`);
+  }
+  return value;
+}
+
 export function optionalString(args: Record<string, unknown>, key: string): string | undefined {
   const value = args[key];
   if (value === undefined || value === null) return undefined;

@@ -1,5 +1,5 @@
 /**
- * The complete Proofpoint Essentials tool surface — 20 tools, FLAT (no router).
+ * The complete Proofpoint Essentials tool surface — 28 tools, FLAT (no router).
  *
  * Deterministic ordering rule: all tools live in this single module-scope
  * `TOOLS` array, grouped by resource (orgs, domains, users, endpoints,
@@ -7,6 +7,11 @@
  * within each group. `tools/list` returns this array by reference for every
  * request, every era, every caller. Never sorted at runtime, never filtered
  * per-session, never varied by credentials.
+ *
+ * The eight sender-list tools (`org_*_list_*` and `users_*_list_*`) sit directly
+ * after `org_delete` and `users_delete`, each group in the order block add,
+ * block remove, allow add, allow remove. They have no `list` argument because
+ * the gateway grants access per tool name, not per argument.
  *
  * Every org/domain/user-scoped tool takes the target org's domain as a
  * per-call argument — Proofpoint Essentials is an MSP multi-tenant API, and
@@ -22,8 +27,13 @@
  *     `idempotentHint: false`, gated at runtime via `confirmDestructive()`
  *     (see elicitation.ts) — the CONFIRM_ARG_PROPERTY fields below.
  *   - Tier B (high-impact but reversible: status toggles, config/licensing
- *     updates): "⚠ HIGH-IMPACT." prefix, `idempotentHint: true`, warning
- *     label only — no runtime confirmation gate.
+ *     updates, and the six sender-list tools other than block-list add):
+ *     "⚠ HIGH-IMPACT." prefix, `idempotentHint: true`, warning label only —
+ *     no runtime confirmation gate.
+ *
+ * Outside the tiers, `org_block_list_add` and `users_block_list_add` are
+ * routine, idempotent, non-destructive writes meant for unattended automation:
+ * no warning prefix and no confirm sentence.
  */
 import type { Tool } from "@modelcontextprotocol/server";
 import { CONFIRM_ARG_PROPERTY } from "./elicitation.js";
@@ -51,6 +61,74 @@ const domainProp = {
 };
 
 const orgDomainProp = { ...domainProp, description: "The target organization's primary domain." };
+
+/**
+ * Block-list add is a routine write for unattended automation: it only adds
+ * entries to the block list, never touches the allow list or the user record,
+ * and is idempotent.
+ */
+const ROUTINE_WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: true,
+} as const;
+
+/** Why each Tier B sender-list change is high-impact; block/add is the routine one and has none. */
+const SENDER_LIST_RISK: Record<string, string | undefined> = {
+  "block/remove": "Removing a block entry re-admits a blocked sender.",
+  "allow/add": "Allow-listing lets mail from that sender bypass spam filtering.",
+  "allow/remove": "Removing an allow entry sends that sender's mail back through filtering.",
+};
+
+/**
+ * Block/allow and add/remove are separate tools with no `list` argument because
+ * the gateway grants access per tool name, not per argument.
+ */
+function senderListTool(scope: "org" | "users", list: "block" | "allow", action: "add" | "remove"): Tool {
+  const opposite = list === "block" ? "allow" : "block";
+  const record = scope === "org" ? "organization" : "user";
+  const risk = SENDER_LIST_RISK[`${list}/${action}`];
+  const description =
+    `${action === "add" ? "Add entries to" : "Remove entries from"} the ${record}'s ${list} list only. ` +
+    `Touches only the sender-lists resource, never the ${record} record, and never changes the ${opposite} list. ` +
+    (action === "add"
+      ? `Entries that are also on the ${opposite} list are reported in also_on_${opposite}_list. `
+      : "") +
+    (risk ? `${risk} ` : "") +
+    "Reads the current lists, changes only the matching entries (case-insensitive), writes both lists, " +
+    "then re-reads to verify; not atomic, so concurrent edits can overwrite each other. " +
+    "Entries: emails, domains, IPv4 addresses, IPv4 wildcards (a.b.c.* or a.b.*.*), or CIDRs from /24 to /32; " +
+    "at most 100 per call; no IPv6 and no host wildcards.";
+  return {
+    name: `proofpoint_essentials_${scope}_${list}_list_${action}`,
+    description: risk ? `⚠ HIGH-IMPACT. ${description} Confirm with the user before invoking.` : description,
+    inputSchema: {
+      type: "object",
+      properties: {
+        orgDomain: orgDomainProp,
+        ...(scope === "users" ? { email: { type: "string", description: "The user's primary email address." } } : {}),
+        entries: {
+          type: "array",
+          minItems: 1,
+          maxItems: 100,
+          items: { type: "string", minLength: 1, maxLength: 320 },
+          description: "Sender entries, e.g. user@example.com, example.com, *@example.com, 10.91.*.*, 192.168.1.0/24.",
+        },
+      },
+      required: ["orgDomain", ...(scope === "users" ? ["email"] : []), "entries"],
+    },
+    annotations: risk ? HIGH_IMPACT_ANNOTATIONS : ROUTINE_WRITE_ANNOTATIONS,
+  };
+}
+
+/** The four tools of one scope, in the fixed order block add/remove, allow add/remove. */
+const senderListTools = (scope: "org" | "users"): Tool[] => [
+  senderListTool(scope, "block", "add"),
+  senderListTool(scope, "block", "remove"),
+  senderListTool(scope, "allow", "add"),
+  senderListTool(scope, "allow", "remove"),
+];
 
 export const TOOLS: Tool[] = [
   // ── Organizations ──────────────────────────────────────────────────────
@@ -91,6 +169,8 @@ export const TOOLS: Tool[] = [
     },
     annotations: DESTRUCTIVE_ANNOTATIONS,
   },
+
+  ...senderListTools("org"),
 
   // ── Domains ─────────────────────────────────────────────────────────────
   {
@@ -236,7 +316,12 @@ export const TOOLS: Tool[] = [
   },
   {
     name: "proofpoint_essentials_users_update",
-    description: "⚠ HIGH-IMPACT. Update a user's details. Confirm with the user before invoking.",
+    description:
+      "⚠ HIGH-IMPACT. Update a user's details. The update may replace the whole record, so this tool " +
+      "reads the existing user and merges on every update, then sends the merged record back in full; " +
+      "it refuses to update when the existing record or account type cannot be read. " +
+      "For sender-list changes use the block/allow list tools (users_block_list_add and the other " +
+      "users_*_list_* tools) instead. Confirm with the user before invoking.",
     inputSchema: {
       type: "object",
       properties: {
@@ -268,6 +353,8 @@ export const TOOLS: Tool[] = [
     },
     annotations: DESTRUCTIVE_ANNOTATIONS,
   },
+
+  ...senderListTools("users"),
 
   // ── Endpoint discovery ──────────────────────────────────────────────────
   {
