@@ -82,7 +82,8 @@ export async function handleToolCall(
   elicitation: ElicitationContext = NO_ELICITATION
 ): Promise<ToolResult | InputRequiredResult> {
   const redactHostnames = name.startsWith("proofpoint_essentials_domains_");
-  const handler = HANDLERS[name];
+  // Own keys only: "constructor" and other inherited names must not resolve to a handler.
+  const handler = Object.hasOwn(HANDLERS, name) ? HANDLERS[name] : undefined;
   if (!handler) {
     return errorResult(sanitize(`Unknown tool: ${name}`, { redactHostnames }));
   }

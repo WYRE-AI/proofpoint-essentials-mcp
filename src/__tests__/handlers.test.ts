@@ -85,6 +85,19 @@ describe("unknown tool / invalid arguments / vendor errors", () => {
     expect(result.content[0].text).toContain("Unknown tool");
   });
 
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty", "valueOf"])(
+    "inherited Object.prototype name %s is an unknown tool and leaks nothing",
+    async (name) => {
+      const client = Object.assign(stubClient(), {
+        httpClient: { username: "dummy-user-PROBE", password: "dummy-password-PROBE" },
+      });
+      const result = asTool(await handleToolCall(client, name, {}));
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("Unknown tool");
+      expect(JSON.stringify(result)).not.toContain("dummy-");
+    }
+  );
+
   it("missing required argument → isError, vendor never called", async () => {
     const client = stubClient();
     const result = asTool(await handleToolCall(client, "proofpoint_essentials_org_get", {}));
