@@ -95,10 +95,23 @@ describe("error boundaries", () => {
   it.each([
     { success: true, status: 201, error: null },
     { success: true, status: 201, errors: [] },
+    { primary_email: "created@acme.com", firstname: "Created", surname: "User" },
   ])("keeps raw results for a confirmed success with an empty error field %j", (item) => {
     const result = batchCreateResult("user", [item] as BatchItemResult[], 1);
     expect(result.isError).toBeUndefined();
-    expect(JSON.parse(result.content[0].text).results).toEqual([item]);
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.summary).toEqual({
+      requested: 1, returned: 1, succeeded: 1, failed: 0, unconfirmed: 0,
+    });
+    expect(payload.results).toEqual([item]);
+  });
+  it("treats a Proofpoint Domain create body as succeeded without status/success", () => {
+    const item = { name: "created.acme.com", is_relay: true };
+    const result = batchCreateResult("domain", [item] as BatchItemResult[], 1);
+    expect(result.isError).toBeUndefined();
+    const payload = JSON.parse(result.content[0].text);
+    expect(payload.summary.succeeded).toBe(1);
+    expect(payload.results).toEqual([item]);
   });
   it.each([
     { error: "bob@x.com exists" },

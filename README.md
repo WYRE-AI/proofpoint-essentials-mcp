@@ -173,6 +173,8 @@ not scoped to a single org).
 - `proofpoint_essentials_users_delete` ⚠ destructive, irreversible
 
 The create serialization and result normalization fix requires `@wyre-ai/node-proofpoint-essentials >= 1.0.2`, which this package depends on.
+`users_create` / `domains_create` treat a returned User (`primary_email`) or Domain (`name`) with no error fields as succeeded even when Proofpoint omits `status`/`success`.
+The single-user `users_get` path fix needs `@wyre-ai/node-proofpoint-essentials >= 1.1.1` (pending SDK release of WYREAI-574).
 
 ### Endpoint discovery
 - `proofpoint_essentials_endpoint_discover` — resolve which region hosts a customer domain
