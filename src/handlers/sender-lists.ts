@@ -1,6 +1,7 @@
 /**
  * Block/allow list changes on the dedicated sender-lists resources: read, change
- * one list, write, re-read to verify. Not atomic; the last writer wins.
+ * one list, write only that list, re-read to verify both. Not atomic; concurrent
+ * changes to the same list are last-write-wins.
  */
 import { isIPv4 } from "node:net";
 import { ServiceError, type ProofpointEssentialsClient, type SenderLists } from "@wyre-ai/node-proofpoint-essentials";
@@ -23,7 +24,7 @@ const DOMAIN_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 
 type ListKey = "allow_list" | "block_list";
 
-/** Only the lists the response actually contained: an omitted key stays omitted. */
+/** A sender-lists response or PATCH body: an omitted key stays omitted. */
 type Lists = SenderLists;
 
 const itemsOf = (lists: Lists, key: ListKey): string[] => lists[key] ?? [];
@@ -199,7 +200,8 @@ export async function changeSenderList(
   // Only the changed list is sent, so the other list is never written: a stale copy of it
   // cannot overwrite a concurrent edit, and a block-list tool never writes the allow list.
   // Whether PATCH merges or replaces is unverified against a live account. If it replaced
-  // the whole resource, the re-read below would show the other list gone and fail.
+  // the whole resource, the re-read below would show the other list gone and fail (when the
+  // first read returned that list; an omitted list reads as empty and its loss is not seen).
   const lists: Lists = { [target]: updated };
   if (email === undefined) await client.senderLists.updateOrg(orgDomain, lists, "PATCH");
   else await client.senderLists.updateUser(orgDomain, email, lists, "PATCH");

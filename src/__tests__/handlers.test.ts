@@ -737,6 +737,19 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
       expect(result.content[0].text).toContain("could not be confirmed");
       expect(result.content[0].text).toContain("allow list differs: 1 missing, 0 unexpected");
     });
+    it("does not restore an opposite-list entry that was removed between the read and the write", async () => {
+      const { client, get, update } = senderListsClient(scope, { allow_list: ["gone@example.com"], block_list: [] });
+      const read = get.getMockImplementation()!;
+      get.mockImplementationOnce(async () => {
+        const lists = await read();
+        await update(...prefix, { allow_list: [] }, "PATCH");
+        return lists;
+      });
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect((await read()).allow_list).toEqual([]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("allow list differs: 1 missing, 0 unexpected");
+    });
     it("keeps the opposite-list problem and the closing guidance within the dispatcher's 300-character cap", async () => {
       const { client } = senderListsClient(scope, {
         allow_list: ["vip@partner.example.com"], block_list: [],

@@ -230,7 +230,7 @@ The result reports `list`, `changed`, `verified` (after a confirmed write), `add
 and the target list `entries` (or `entries_omitted: true` above 100 entries or when any
 entry is longer than 320 characters). Adding also reports
 `also_on_allow_list` or `also_on_block_list` for requested entries that are on the other
-list; the other list is never changed.
+list; the other list is never written.
 
 Accepted entries:
 
@@ -257,15 +257,20 @@ exercised against a live Proofpoint account. Treat the first live use with care.
 limits:
 
 - Whether PATCH merges or replaces is unverified. If PATCH replaced the whole resource, the
-  other list would be cleared, the re-read would show it, and the call would report an
-  unconfirmed write instead of a success.
+  other list would be cleared, and the re-read would show it and the call would report an
+  unconfirmed write, provided the first read returned entries on that list. A populated
+  other list that the upstream omits from its responses reads as empty, so its loss would
+  not be seen.
 - A missing target key (including an empty response: an empty object, `204`, or an empty
   body) reads as an empty list, so an add is written as just the new entries; if the
   upstream omits a populated target list, that list is overwritten. A removal from a
   missing target list is a no-op.
 - Concurrent changes to the same list are last-write-wins: both calls read, change and
-  write the whole list, so the later write can undo the earlier one. A change to the other
-  list does not overwrite this one, because only the target list is written.
+  write the whole list, so the later write can undo the earlier one. If PATCH merges, a
+  concurrent change to the other list is not overwritten, because only the target list is
+  written. If it lands between this call's read and re-read, the call still reports an
+  unconfirmed write although its own change was applied; retrying is safe, because the
+  retry finds nothing left to change.
 
 There is no sender-list read tool yet. These tools require
 `@wyre-ai/node-proofpoint-essentials` >= 1.1.0.
