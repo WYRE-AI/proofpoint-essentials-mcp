@@ -199,7 +199,7 @@ export async function changeSenderList(
   // Whether PATCH merges or replaces is unverified against a live account. Sending the
   // target as modified and the other list exactly as read, but only when the read
   // returned it, is correct under either behaviour: a list the read omitted is never
-  // written, so it cannot be cleared.
+  // written as [].
   const lists: Lists = { ...before, [target]: updated };
   if (email === undefined) await client.senderLists.updateOrg(orgDomain, lists, "PATCH");
   else await client.senderLists.updateUser(orgDomain, email, lists, "PATCH");

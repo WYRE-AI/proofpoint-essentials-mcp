@@ -96,7 +96,7 @@ function senderListTool(scope: "org" | "users", list: "block" | "allow", action:
       ? `Entries that are also on the ${opposite} list are reported in also_on_${opposite}_list. `
       : "") +
     (risk ? `${risk} ` : "") +
-    "Reads the current lists, changes only the matching entries (case-insensitive), writes both lists, " +
+    "Reads the current lists, changes only the matching entries (case-insensitive), writes that list (and the other list as read, when the read returned it), " +
     "then re-reads to verify; not atomic, so concurrent edits can overwrite each other. " +
     "Entries: emails, domains, IPv4 addresses, IPv4 wildcards (a.b.c.* or a.b.*.*), or CIDRs from /24 to /32; " +
     "at most 100 per call; no IPv6 and no host wildcards.";
@@ -330,7 +330,8 @@ export const TOOLS: Tool[] = [
         data: {
           type: "object",
           additionalProperties: true,
-          description: "Fields to update on the user.",
+          description:
+            "Fields to update on the user. Response-only fields (uid, password, creation_date, last_update, last_login) are ignored.",
         },
       },
       required: ["orgDomain", "email", "data"],

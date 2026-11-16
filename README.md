@@ -260,7 +260,9 @@ read is meant to be correct under either PATCH behaviour, and the tools fail clo
 treat the first live use with care. Known limit: a missing target key (including an empty
 response: an empty object, `204`, or an empty body) reads as an empty list, so an add is
 written as just the new entries; if the upstream omits a populated target list and PATCH
-replaces, that list is overwritten. A removal from a missing target list is a no-op.
+replaces, that list is overwritten. Likewise, if the upstream omits a populated other
+list and PATCH replaces the whole resource, that list is still lost and verification
+cannot see it. A removal from a missing target list is a no-op.
 There is no sender-list read tool yet. These tools require
 `@wyre-ai/node-proofpoint-essentials` >= 1.1.0.
 
