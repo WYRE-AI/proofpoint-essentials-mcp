@@ -91,7 +91,7 @@ function senderListTool(scope: "org" | "users", list: "block" | "allow", action:
   const risk = SENDER_LIST_RISK[`${list}/${action}`];
   const description =
     `${action === "add" ? "Add entries to" : "Remove entries from"} the ${record}'s ${list} list only. ` +
-    `Touches only the sender-lists resource, never the ${record} record, and never writes the ${opposite} list.` +
+    `Touches only the sender-lists resource, never the ${record} record, and never writes the ${opposite} list. ` +
     (action === "add"
       ? `Entries that are also on the ${opposite} list are reported in also_on_${opposite}_list. `
       : "") +

@@ -173,6 +173,10 @@ describe("sender-list tools", () => {
           });
         });
 
+        it("puts a space between the sentences of its description", () => {
+          expect(tool().description).not.toMatch(/\.[A-Z]/);
+        });
+
         if (routine) {
           it("is a plain, idempotent, non-destructive write for unattended automation", () => {
             expect(tool().annotations).toEqual({

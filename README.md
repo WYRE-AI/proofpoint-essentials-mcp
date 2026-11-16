@@ -268,7 +268,7 @@ limits:
 - Concurrent changes to the same list are last-write-wins: both calls read, change and
   write the whole list, so the later write can undo the earlier one. If PATCH merges, a
   concurrent change to the other list is not overwritten, because only the target list is
-  written. If it lands between this call's read and re-read, the call still reports an
+  written. If it lands between this call's read and re-read, the call reports an
   unconfirmed write although its own change was applied; retrying is safe, because the
   retry finds nothing left to change.
 
