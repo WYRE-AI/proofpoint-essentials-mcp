@@ -214,7 +214,7 @@ spelling wins) and matched case-insensitively.
 
 How a change works: read the current lists, change only the target list, write it with
 PATCH (the target as modified; the other list exactly as read, but only when the read
-returned it, so a list the read omitted is never written), then re-read and verify
+returned it, so the other list is never written when the read omitted it), then re-read and verify
 that both lists hold exactly the expected entries (compared case-insensitively as sets): the
 target list as modified, the other list as before. An omitted list counts as empty in that
 comparison. If nothing would change, no write is made
