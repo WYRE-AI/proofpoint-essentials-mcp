@@ -298,8 +298,15 @@ describe.each(["users", "domains"] as const)("%s create batch results", (resourc
       succeeded: 0, failed: 1, unconfirmed: 0,
     },
     {
-      name: "unconfirmed items",
-      results: [{ primary_email: "unknown@acme.com" }, { message: "accepted" }],
+      name: "Proofpoint resource identity without status is succeeded",
+      results: resource === "users"
+        ? [{ primary_email: "created@acme.com", firstname: "Created" }]
+        : [{ name: "created.acme.com", is_relay: true }],
+      succeeded: 1, failed: 0, unconfirmed: 0,
+    },
+    {
+      name: "unconfirmed items without identity or status",
+      results: [{ message: "accepted" }, {}],
       succeeded: 0, failed: 0, unconfirmed: 2,
     },
     {
@@ -330,14 +337,21 @@ describe.each(["users", "domains"] as const)("%s create batch results", (resourc
     expect(result.isError).toBe(failed > 0 ? true : undefined);
     const text = result.content[0].text;
     const payload = JSON.parse(failed > 0 ? text.slice(text.indexOf("\n\n") + 2) : text);
+    const expectedOutcome = (item: BatchItemResult): "succeeded" | "failed" | "unconfirmed" => {
+      const codes = [item.status, item.code].filter((value): value is number => typeof value === "number");
+      const hasIdentity = (resource === "users"
+        ? [item.primary_email, item.email]
+        : [item.name]
+      ).some((value) => typeof value === "string" && value.trim() !== "");
+      if (item.success === false || codes.some((code) => code < 200 || code >= 300)) return "failed";
+      if (item.success === true || codes.length > 0 || hasIdentity) return "succeeded";
+      return "unconfirmed";
+    };
     expect(payload).toEqual({
       summary: { requested: Math.max(submitted, results.length), returned: results.length, succeeded, failed, unconfirmed },
       results: succeeded !== results.length || unconfirmed > 0 ? original.map((item, index) => ({
         index,
-        outcome: item.success === false || [item.status, item.code].some(
-          (code) => typeof code === "number" && (code < 200 || code >= 300)
-        ) ? "failed" : item.success === true || typeof item.status === "number" || typeof item.code === "number"
-          ? "succeeded" : "unconfirmed",
+        outcome: expectedOutcome(item),
         ...(typeof item.status === "number" ? { status: item.status } : {}),
         ...(typeof item.code === "number" ? { code: item.code } : {}),
         ...(typeof item.message === "string" ? { message: item.message } : {}),

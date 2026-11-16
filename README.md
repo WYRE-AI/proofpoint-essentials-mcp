@@ -184,6 +184,10 @@ email address: a local part, an `@`, then a domain.
 - `proofpoint_essentials_users_allow_list_add` — add entries to a user's allow list ⚠ high-impact
 - `proofpoint_essentials_users_allow_list_remove` — remove entries from a user's allow list ⚠ high-impact
 
+The create serialization and result normalization fix requires `@wyre-ai/node-proofpoint-essentials >= 1.0.2`.
+`users_create` / `domains_create` treat a returned User (`primary_email`) or Domain (`name`) with no error fields as succeeded even when Proofpoint omits `status`/`success`.
+The single-user `users_get` path fix needs `@wyre-ai/node-proofpoint-essentials >= 1.1.1`, which this package depends on.
+
 ### Sender-list tools
 
 There are 28 tools in total, including these eight. They have no `list` argument: block

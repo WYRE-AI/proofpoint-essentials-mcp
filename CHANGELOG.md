@@ -38,7 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 - Tool names are resolved on the handler table's own keys only; before, `constructor`
   returned the SDK client, including the upstream credentials, as the tool result.
-- Share email redaction and Unicode-aware error limits across error boundaries; redact
+- Treat Proofpoint create success items that carry `primary_email`/`email` (users) or
+  `name` (domains) with no error fields as succeeded, so `users_create` no longer
+  reports created users as unconfirmed.
+- Share email redaction and Unicode-safe error limits across error boundaries; redact
   domain-tool hostnames and reduce vendor errors to status/code metadata.
 - Clean failed and unconfirmed create results, including error-bearing 201 objects
   and non-JSON response text, instead of returning them raw.

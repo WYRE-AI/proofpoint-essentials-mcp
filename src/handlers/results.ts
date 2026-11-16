@@ -32,9 +32,15 @@ export function batchCreateResult(
     const hasError = (value: unknown): boolean =>
       value !== undefined && value !== null && value !== "" && value !== false &&
       !(Array.isArray(value) && value.length === 0);
+    // Proofpoint postUser 201 returns a User (required primary_email); postDomain returns a Domain (required name).
+    // Batch 207 success items often carry the created resource identity with no status/success flag.
+    const hasProofpointSuccessIdentity = (kind === "user"
+      ? [record.primary_email, record.email]
+      : [record.name]
+    ).some((value) => typeof value === "string" && value.trim() !== "");
     if (hasError(record.error) || hasError((record as { errors?: unknown }).errors) || record.success === false || codes.some((code) => code < 200 || code >= 300)) {
       outcome = "failed";
-    } else if (record.success === true || codes.length > 0) {
+    } else if (record.success === true || codes.length > 0 || hasProofpointSuccessIdentity) {
       outcome = "succeeded";
     } else {
       outcome = "unconfirmed";
