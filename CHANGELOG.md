@@ -36,6 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a path segment must also be shaped like an email address.
 
 ### Fixed
+- A sender-list write whose verification re-read fails now keeps the vendor status in the
+  error (`HTTP 429: ...`) and puts the "check the current lists before retrying" guidance
+  first, so the 300-character cap cannot cut it.
 - Tool names are resolved on the handler table's own keys only; before, `constructor`
   returned the SDK client, including the upstream credentials, as the tool result.
 - Treat Proofpoint create success items that carry `primary_email`/`email` (users) or

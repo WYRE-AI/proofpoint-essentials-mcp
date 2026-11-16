@@ -3,7 +3,7 @@
  * one list, write, re-read to verify. Not atomic; the last writer wins.
  */
 import { isIPv4 } from "node:net";
-import type { ProofpointEssentialsClient, SenderLists } from "@wyre-ai/node-proofpoint-essentials";
+import { ServiceError, type ProofpointEssentialsClient, type SenderLists } from "@wyre-ai/node-proofpoint-essentials";
 import {
   errorResult,
   jsonResult,
@@ -209,7 +209,9 @@ export async function changeSenderList(
     after = await read();
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return errorResult(`Sender-list write could not be confirmed: the lists could not be re-read (${reason}). Check the current lists before retrying.`);
+    const detail = error instanceof ServiceError ? `HTTP ${error.statusCode}: ${reason}` : reason;
+    // The guidance comes first so the dispatcher's 300-character cap can never cut it off.
+    return errorResult(`Sender-list write could not be confirmed: check the current lists before retrying. The re-read failed (${detail}).`);
   }
   // The guidance comes before the details so the cap can never cut it off. The opposite
   // list comes first among the details: it is the more important half of a failure.

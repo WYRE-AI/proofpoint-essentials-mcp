@@ -7,7 +7,7 @@
  */
 import { describe, expect, it, vi } from "vitest";
 import type { InputRequiredResult } from "@modelcontextprotocol/server";
-import { NotFoundError, ValidationError, type BatchItemResult, type ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
+import { NotFoundError, ServiceError, ValidationError, type BatchItemResult, type ProofpointEssentialsClient } from "@wyre-ai/node-proofpoint-essentials";
 import { CONFIRM_ARG, type ElicitationContext } from "../elicitation.js";
 import { handleToolCall } from "../handlers/index.js";
 import type { ToolResult } from "../handlers/results.js";
@@ -772,6 +772,25 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
       expect(text).not.toContain("\n");
       expect(text).toContain('(first: "\\nevil.com")');
       expect(text.indexOf("check the lists")).toBeLessThan(text.indexOf("block list differs"));
+    });
+    it("keeps the vendor status when the re-read fails with a ServiceError, guidance first", async () => {
+      const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      get.mockResolvedValueOnce({ allow_list: [], block_list: [] })
+        .mockRejectedValueOnce(new ServiceError("rate limited", 429, null));
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toBe(
+        "Sender-list write could not be confirmed: check the current lists before retrying. The re-read failed (HTTP 429: rate limited)."
+      );
+    });
+    it("keeps the guidance and the message when the re-read fails with a plain Error", async () => {
+      const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      get.mockResolvedValueOnce({ allow_list: [], block_list: [] })
+        .mockRejectedValueOnce(new Error("socket closed"));
+      const text = (await run(client, "block", "add", ["a.example.com"])).content[0].text;
+      expect(text).toContain("check the current lists before retrying");
+      expect(text).toContain("The re-read failed (socket closed)");
+      expect(text).not.toContain("HTTP");
     });
     it("reports an error when the re-read is unreadable", async () => {
       const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
