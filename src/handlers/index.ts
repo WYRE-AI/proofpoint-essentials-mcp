@@ -21,6 +21,7 @@ import {
 import { deleteOrg, getOrg, setOrgActive } from "./orgs.js";
 import { createUsers, deleteUser, getUser, listUsers, updateUser } from "./users.js";
 import { errorResult, ToolInputError, type ToolResult } from "./results.js";
+import { changeSenderList } from "./sender-lists.js";
 
 type ToolHandler = (
   client: ProofpointEssentialsClient,
@@ -32,6 +33,10 @@ const HANDLERS: Record<string, ToolHandler> = {
   proofpoint_essentials_org_get: (client, args) => getOrg(client, args),
   proofpoint_essentials_org_set_active: (client, args) => setOrgActive(client, args),
   proofpoint_essentials_org_delete: deleteOrg,
+  proofpoint_essentials_org_block_list_add: (client, args) => changeSenderList(client, args, "org", "block", "add"),
+  proofpoint_essentials_org_block_list_remove: (client, args) => changeSenderList(client, args, "org", "block", "remove"),
+  proofpoint_essentials_org_allow_list_add: (client, args) => changeSenderList(client, args, "org", "allow", "add"),
+  proofpoint_essentials_org_allow_list_remove: (client, args) => changeSenderList(client, args, "org", "allow", "remove"),
   proofpoint_essentials_domains_list: (client, args) => listDomains(client, args),
   proofpoint_essentials_domains_create: (client, args) => createDomains(client, args),
   proofpoint_essentials_domains_update: (client, args) => updateDomain(client, args),
@@ -41,6 +46,10 @@ const HANDLERS: Record<string, ToolHandler> = {
   proofpoint_essentials_users_create: (client, args) => createUsers(client, args),
   proofpoint_essentials_users_update: (client, args) => updateUser(client, args),
   proofpoint_essentials_users_delete: deleteUser,
+  proofpoint_essentials_users_block_list_add: (client, args) => changeSenderList(client, args, "user", "block", "add"),
+  proofpoint_essentials_users_block_list_remove: (client, args) => changeSenderList(client, args, "user", "block", "remove"),
+  proofpoint_essentials_users_allow_list_add: (client, args) => changeSenderList(client, args, "user", "allow", "add"),
+  proofpoint_essentials_users_allow_list_remove: (client, args) => changeSenderList(client, args, "user", "allow", "remove"),
   proofpoint_essentials_endpoint_discover: (client, args) => discoverEndpoint(client, args),
   proofpoint_essentials_features_get: (client, args) => getFeatures(client, args),
   proofpoint_essentials_features_update: (client, args) => updateFeatures(client, args),
@@ -65,6 +74,7 @@ function describeServiceError(error: ServiceError, redactHostnames: boolean): st
   );
 }
 
+/** Dispatch a tool call and sanitize handler results and errors. */
 export async function handleToolCall(
   client: ProofpointEssentialsClient,
   name: string,
@@ -72,7 +82,8 @@ export async function handleToolCall(
   elicitation: ElicitationContext = NO_ELICITATION
 ): Promise<ToolResult | InputRequiredResult> {
   const redactHostnames = name.startsWith("proofpoint_essentials_domains_");
-  const handler = HANDLERS[name];
+  // Own keys only: "constructor" and other inherited names must not resolve to a handler.
+  const handler = Object.hasOwn(HANDLERS, name) ? HANDLERS[name] : undefined;
   if (!handler) {
     return errorResult(sanitize(`Unknown tool: ${name}`, { redactHostnames }));
   }
