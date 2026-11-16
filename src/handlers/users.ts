@@ -92,8 +92,10 @@ export async function updateUser(
 ): Promise<ToolResult> {
   const orgDomain = requirePathSegment(args, "orgDomain");
   const email = requireEmailSegment(args, "email");
+  // Response-only fields are dropped here, as on create, so data made only of them counts as empty.
   const data = Object.fromEntries(
-    Object.entries(requireObject(args, "data")).filter(([, value]) => value !== null && value !== undefined)
+    Object.entries(requireObject(args, "data")).filter(([key, value]) =>
+      value !== null && value !== undefined && !RESPONSE_ONLY_FIELDS.includes(key))
   );
   for (const field of ["type", "role"]) {
     if (!(field in data)) continue;
@@ -101,7 +103,7 @@ export async function updateUser(
     if (data[field].trim() === "") delete data[field]; // blank means omitted
   }
   if (Object.keys(data).length === 0) {
-    throw new ToolInputError('Argument "data" must contain at least one field with a value.');
+    throw new ToolInputError('Argument "data" must contain at least one writable field with a value.');
   }
 
   const existing = findUser(await client.users.get(orgDomain, email), email);

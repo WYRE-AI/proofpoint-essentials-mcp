@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   update, also when `type` is supplied, and sends the merged record back in full. It refuses
   to update when the record cannot be read, matched by `primary_email`, or has no account
   type to keep. Empty `data` (also when only blank `type` or `role` remain) and non-string
-  `type` or `role` are rejected.
+  `type` or `role` are rejected. Response-only fields (`uid`, `password`, `creation_date`,
+  `last_update`, `last_login`) in `data` are ignored, as on create, so `data` made only of
+  them is rejected before any vendor call.
 - Every handler argument that ends up in an upstream URL path (`orgDomain`, `domain`, user
   `email`) is validated: no whitespace, control characters, `/`, `\`, `?`, `#`, and not `.`
   or `..`, which URL resolution would collapse onto a parent resource. A user `email` used

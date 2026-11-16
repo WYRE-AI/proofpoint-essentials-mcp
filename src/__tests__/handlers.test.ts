@@ -1102,6 +1102,22 @@ describe("users_update always read-merges the existing record", () => {
     });
   }
 
+  it("rejects data made only of response-only fields before any vendor call", async () => {
+    const client = clientWith(existing);
+    const result = await update(client, {
+      data: { uid: 2, password: "x", creation_date: "d", last_update: "d", last_login: "d" },
+    });
+    expect(result.isError).toBe(true);
+    expect(result.content[0].text).toContain("data");
+    expectNoVendorCalls(client);
+  });
+
+  it("sends only the writable fields when data mixes in response-only fields", async () => {
+    const client = clientWith(existing);
+    await update(client, { data: { surname: "Updated", uid: 2, password: "x", last_login: "d" } });
+    expect(client.users.update).toHaveBeenCalledWith("example.com", "user@example.com", merged);
+  });
+
   it.each([null, undefined])("keeps existing fields when an update value is %j", async (firstname) => {
     const client = clientWith(existing);
     await update(client, { data: { surname: "Updated", firstname, department: "" } });
