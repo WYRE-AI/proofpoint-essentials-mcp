@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `_org_block_list_remove`, `_org_allow_list_add`, `_org_allow_list_remove`, and the
   `users_` equivalents (`proofpoint_essentials_users_block_list_add`, and so on).
   `block_list_add` is a routine idempotent write for unattended automation; the other six
-  are high-impact. Each reads the current lists, changes one list only, writes both lists,
-  re-reads to verify, and fails closed when the lists cannot be read or the write cannot be
+  are high-impact. Each reads the current lists, changes one list only, writes it together
+  with the other list as read (never a list the read omitted), re-reads to verify, and fails closed when the lists cannot be read or the write cannot be
   confirmed. Entries are validated (no host wildcards, no IPv6, CIDR /24 to /32, at most 100,
   no leading zeros in wildcard octets or CIDR prefixes). Invalid entries are named by their
   position in `entries`. Verification compares both lists as sets, and its error reports

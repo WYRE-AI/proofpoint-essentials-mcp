@@ -212,10 +212,12 @@ Parameters: `orgDomain`, `email` (users tools only), and `entries`, an array of 
 strings (each 1 to 320 characters). Entries are de-duplicated case-insensitively (first
 spelling wins) and matched case-insensitively.
 
-How a change works: read the current lists, change only the target list, write both lists
-(the target as modified, the other exactly as read) with PATCH, then re-read and verify
+How a change works: read the current lists, change only the target list, write it with
+PATCH (the target as modified; the other list exactly as read, but only when the read
+returned it, so a list the read omitted is never written), then re-read and verify
 that both lists hold exactly the expected entries (compared case-insensitively as sets): the
-target list as modified, the other list as before. If nothing would change, no write is made
+target list as modified, the other list as before. An omitted list counts as empty in that
+comparison. If nothing would change, no write is made
 (`changed: false`). If verification fails, or the lists cannot be read as an object of string
 lists, the tool returns an error instead of a success. The mismatch error gives counts and
 one short sample per differing list, because error text is cut at 300 characters and email
@@ -253,11 +255,12 @@ accepted. Review entries before adding them.
 
 Caveat: the sender-lists endpoints, their response keys and the PATCH semantics (merge or
 replace) come from the `@wyre-ai/node-proofpoint-essentials` SDK and have not been
-exercised against a live Proofpoint account. Sending both lists is meant to be correct under
-either PATCH behaviour, and the tools fail closed, but treat the first live use with care.
-One residual risk: an empty response (an empty object, `204`, or an empty body) reads as two
-empty lists, and a missing key reads as an empty list; if the upstream answers with nothing
-and PATCH replaces, the other list is written back empty.
+exercised against a live Proofpoint account. Sending the target list plus the other list as
+read is meant to be correct under either PATCH behaviour, and the tools fail closed, but
+treat the first live use with care. Known limit: a missing target key (including an empty
+response: an empty object, `204`, or an empty body) reads as an empty list, so an add is
+written as just the new entries; if the upstream omits a populated target list and PATCH
+replaces, that list is overwritten. A removal from a missing target list is a no-op.
 There is no sender-list read tool yet. These tools require
 `@wyre-ai/node-proofpoint-essentials` >= 1.1.0.
 

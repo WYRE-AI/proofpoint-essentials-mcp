@@ -643,6 +643,45 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
     });
   });
 
+  describe("never writes a list the read did not return", () => {
+    const sent = (update: ReturnType<typeof vi.fn>) => update.mock.calls[0][prefix.length] as Record<string, unknown>;
+
+    it("omits the opposite key from the PATCH body when the read left it out", async () => {
+      const { client, update } = senderListsClient(scope, { block_list: ["b.example.com"] });
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect(result.isError).toBeUndefined();
+      expect(sent(update)).toEqual({ block_list: ["b.example.com", "a.example.com"] });
+      expect(Object.hasOwn(sent(update), "allow_list")).toBe(false);
+    });
+
+    it("omits the opposite key for an allow-list write too", async () => {
+      const { client, update } = senderListsClient(scope, { allow_list: ["a@example.com"] });
+      await run(client, "allow", "remove", ["a@example.com"]);
+      expect(sent(update)).toEqual({ allow_list: [] });
+      expect(Object.hasOwn(sent(update), "block_list")).toBe(false);
+    });
+
+    it("sends both lists, the opposite exactly as read, when the read returned both", async () => {
+      const { client, update } = senderListsClient(scope, { allow_list: ["Keep@example.com"], block_list: [] });
+      await run(client, "block", "add", ["a.example.com"]);
+      expect(sent(update)).toEqual({ allow_list: ["Keep@example.com"], block_list: ["a.example.com"] });
+    });
+
+    it("sends only the target key on an add when the read returned {}", async () => {
+      const { client, update } = senderListsClient(scope, {});
+      const result = await run(client, "allow", "add", ["a.example.com"]);
+      expect(body(result)).toMatchObject({ verified: true, counts: { allow_list: 1, block_list: 0 } });
+      expect(sent(update)).toEqual({ allow_list: ["a.example.com"] });
+      expect(Object.hasOwn(sent(update), "block_list")).toBe(false);
+    });
+
+    it("makes no write on a remove when the read returned {}", async () => {
+      const { client, update } = senderListsClient(scope, {});
+      expect(body(await run(client, "block", "remove", ["a.example.com"]))).toMatchObject({ changed: false });
+      expect(update).not.toHaveBeenCalled();
+    });
+  });
+
   it("returns entries only up to 100 and otherwise sets entries_omitted", async () => {
     const existing = Array.from({ length: 99 }, (_, i) => `d${i}.example.com`);
     const small = senderListsClient(scope, { allow_list: [], block_list: existing });

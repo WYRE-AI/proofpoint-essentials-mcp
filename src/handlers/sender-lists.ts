@@ -21,7 +21,12 @@ const LOCAL_PART = /^[a-z0-9.!#$%&*+/=?^_`{|}~-]{1,64}$/i;
 const CANONICAL_NUMBER = /^(0|[1-9]\d{0,2})$/;
 const DOMAIN_LABEL = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/i;
 
-type Lists = Required<SenderLists>;
+type ListKey = "allow_list" | "block_list";
+
+/** Only the lists the response actually contained: an omitted key stays omitted. */
+type Lists = SenderLists;
+
+const itemsOf = (lists: Lists, key: ListKey): string[] => lists[key] ?? [];
 
 function domainProblem(host: string): string | null {
   if (host.length > 253) return "domain must be at most 253 characters";
@@ -102,22 +107,23 @@ function requireEntries(args: Record<string, unknown>): string[] {
 
 /**
  * Copy a sender-lists response, refusing anything that is not clearly a pair of string lists.
- * Known limit: an empty object (or a 204 / empty body, which the SDK returns as {}) and a
- * missing key both read as an empty list, so an upstream that answers with nothing is
- * indistinguishable from two empty lists.
+ * A key the response omitted is left out of the copy, so a write never invents an empty list
+ * for it; readers treat a missing list as empty (itemsOf). Known limit: an empty object (or a
+ * 204 / empty body, which the SDK returns as {}) reads as two empty lists.
  */
 function snapshot(value: unknown): Lists {
   const unreadable = () => new ToolInputError("Existing sender lists could not be read safely; refusing update.");
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw unreadable();
   const record = value as Record<string, unknown>;
   if (Object.keys(record).length > 0 && !("allow_list" in record) && !("block_list" in record)) throw unreadable();
-  const read = (key: "allow_list" | "block_list"): string[] => {
+  const lists: Lists = {};
+  for (const key of ["allow_list", "block_list"] as const) {
     const list = record[key];
-    if (list === undefined) return [];
+    if (list === undefined) continue;
     if (!Array.isArray(list) || !list.every((item) => typeof item === "string")) throw unreadable();
-    return [...list];
-  };
-  return { allow_list: read("allow_list"), block_list: read("block_list") };
+    lists[key] = [...list];
+  }
+  return lists;
 }
 
 const includesEntry = (list: string[], entry: string) =>
@@ -139,7 +145,7 @@ function describeDifference(name: string, expected: string[], actual: string[]):
   return `the ${name} list differs: ${missing.length} missing, ${unexpected.length} unexpected (first: ${first})`;
 }
 
-/** Read the lists, add or remove entries on one list, write both, then re-read to verify. */
+/** Read the lists, add or remove entries on one list, write it (and the other list as read), then re-read to verify. */
 export async function changeSenderList(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>,
@@ -150,16 +156,17 @@ export async function changeSenderList(
   const orgDomain = requirePathSegment(args, "orgDomain");
   const email = scope === "user" ? requireEmailSegment(args, "email") : undefined;
   const entries = requireEntries(args);
-  const target = list === "allow" ? "allow_list" : "block_list";
-  const opposite = list === "allow" ? "block_list" : "allow_list";
+  const target: ListKey = list === "allow" ? "allow_list" : "block_list";
+  const opposite: ListKey = list === "allow" ? "block_list" : "allow_list";
 
   const read = async () => snapshot(email === undefined
     ? await client.senderLists.getOrg(orgDomain)
     : await client.senderLists.getUser(orgDomain, email));
   const before = await read();
 
-  const present = entries.filter((entry) => includesEntry(before[target], entry));
-  const absent = entries.filter((entry) => !includesEntry(before[target], entry));
+  const current = itemsOf(before, target);
+  const present = entries.filter((entry) => includesEntry(current, entry));
+  const absent = entries.filter((entry) => !includesEntry(current, entry));
   const changes = action === "add" ? absent : present;
   const skipped = action === "add" ? present : absent;
 
@@ -173,13 +180,13 @@ export async function changeSenderList(
       ? {
         added: changes,
         skipped_already_present: skipped,
-        [`also_on_${opposite}`]: entries.filter((entry) => includesEntry(before[opposite], entry)),
+        [`also_on_${opposite}`]: entries.filter((entry) => includesEntry(itemsOf(before, opposite), entry)),
       }
       : { removed: changes, skipped_not_present: skipped }),
-    counts: { allow_list: now.allow_list.length, block_list: now.block_list.length },
+    counts: { allow_list: itemsOf(now, "allow_list").length, block_list: itemsOf(now, "block_list").length },
     // Upstream data is echoed only when it is as small as a valid request could be.
-    ...(now[target].length <= MAX_ENTRIES && now[target].every((item) => item.length <= MAX_ENTRY_LENGTH)
-      ? { entries: now[target] }
+    ...(itemsOf(now, target).length <= MAX_ENTRIES && itemsOf(now, target).every((item) => item.length <= MAX_ENTRY_LENGTH)
+      ? { entries: itemsOf(now, target) }
       : { entries_omitted: true }),
   });
 
@@ -187,11 +194,12 @@ export async function changeSenderList(
 
   const changed = new Set(changes.map((entry) => entry.toLowerCase()));
   const updated = action === "add"
-    ? [...before[target], ...changes]
-    : before[target].filter((item) => !changed.has(item.toLowerCase()));
-  // Whether PATCH merges or replaces is unverified against a live account.
-  // Sending both lists (the target as modified, the other exactly as read) is
-  // correct under either behaviour.
+    ? [...current, ...changes]
+    : current.filter((item) => !changed.has(item.toLowerCase()));
+  // Whether PATCH merges or replaces is unverified against a live account. Sending the
+  // target as modified and the other list exactly as read, but only when the read
+  // returned it, is correct under either behaviour: a list the read omitted is never
+  // written, so it cannot be cleared.
   const lists: Lists = { ...before, [target]: updated };
   if (email === undefined) await client.senderLists.updateOrg(orgDomain, lists, "PATCH");
   else await client.senderLists.updateUser(orgDomain, email, lists, "PATCH");
@@ -206,8 +214,8 @@ export async function changeSenderList(
   // The guidance comes before the details so the cap can never cut it off. The opposite
   // list comes first among the details: it is the more important half of a failure.
   const problems = [
-    describeDifference(list === "allow" ? "block" : "allow", before[opposite], after[opposite]),
-    describeDifference(list, updated, after[target]),
+    describeDifference(list === "allow" ? "block" : "allow", itemsOf(before, opposite), itemsOf(after, opposite)),
+    describeDifference(list, updated, itemsOf(after, target)),
   ].filter((problem): problem is string => problem !== null);
   if (problems.length > 0) {
     return errorResult(`Sender-list write could not be confirmed and may be partly applied; check the lists. Found: ${problems.join("; ")}.`);
