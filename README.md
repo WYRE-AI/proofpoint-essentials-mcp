@@ -212,17 +212,15 @@ Parameters: `orgDomain`, `email` (users tools only), and `entries`, an array of 
 strings (each 1 to 320 characters). Entries are de-duplicated case-insensitively (first
 spelling wins) and matched case-insensitively.
 
-How a change works: read the current lists, change only the target list, write it with
-PATCH (the target as modified; the other list exactly as read, but only when the read
-returned it, so the other list is never written when the read omitted it), then re-read and verify
-that both lists hold exactly the expected entries (compared case-insensitively as sets): the
-target list as modified, the other list as before. An omitted list counts as empty in that
-comparison. If nothing would change, no write is made
+How a change works: read the current lists, change only the target list, and write it with
+PATCH. The PATCH body holds only the target list, so the other list is never written. Then
+re-read and verify that both lists hold exactly the expected entries (compared
+case-insensitively as sets): the target list as modified, the other list as first read. An
+omitted list counts as empty in that comparison. If nothing would change, no write is made
 (`changed: false`). If verification fails, or the lists cannot be read as an object of string
 lists, the tool returns an error instead of a success. The mismatch error gives counts and
 one short sample per differing list, because error text is cut at 300 characters and email
-addresses in it are redacted. These operations are not atomic: read, change, write, re-read;
-the last writer wins.
+addresses in it are redacted. These operations are not atomic: read, change, write, re-read.
 
 An invalid entry is reported by its position in your `entries` array (for example
 `Invalid entry 51 of 61`), since the entry text itself may be redacted in the error.
@@ -255,14 +253,20 @@ accepted. Review entries before adding them.
 
 Caveat: the sender-lists endpoints, their response keys and the PATCH semantics (merge or
 replace) come from the `@wyre-ai/node-proofpoint-essentials` SDK and have not been
-exercised against a live Proofpoint account. Sending the target list plus the other list as
-read is meant to be correct under either PATCH behaviour, and the tools fail closed, but
-treat the first live use with care. Known limit: a missing target key (including an empty
-response: an empty object, `204`, or an empty body) reads as an empty list, so an add is
-written as just the new entries; if the upstream omits a populated target list and PATCH
-replaces, that list is overwritten. Likewise, if the upstream omits a populated other
-list and PATCH replaces the whole resource, that list is still lost and verification
-cannot see it. A removal from a missing target list is a no-op.
+exercised against a live Proofpoint account. Treat the first live use with care. Known
+limits:
+
+- Whether PATCH merges or replaces is unverified. If PATCH replaced the whole resource, the
+  other list would be cleared, the re-read would show it, and the call would report an
+  unconfirmed write instead of a success.
+- A missing target key (including an empty response: an empty object, `204`, or an empty
+  body) reads as an empty list, so an add is written as just the new entries; if the
+  upstream omits a populated target list, that list is overwritten. A removal from a
+  missing target list is a no-op.
+- Concurrent changes to the same list are last-write-wins: both calls read, change and
+  write the whole list, so the later write can undo the earlier one. A change to the other
+  list does not overwrite this one, because only the target list is written.
+
 There is no sender-list read tool yet. These tools require
 `@wyre-ai/node-proofpoint-essentials` >= 1.1.0.
 

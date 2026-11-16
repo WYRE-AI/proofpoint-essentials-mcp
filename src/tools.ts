@@ -64,7 +64,7 @@ const orgDomainProp = { ...domainProp, description: "The target organization's p
 
 /**
  * Block-list add is a routine write for unattended automation: it only adds
- * entries to the block list, never touches the allow list or the user record,
+ * entries to the block list, never writes the allow list or the user record,
  * and is idempotent.
  */
 const ROUTINE_WRITE_ANNOTATIONS = {
@@ -96,8 +96,8 @@ function senderListTool(scope: "org" | "users", list: "block" | "allow", action:
       ? `Entries that are also on the ${opposite} list are reported in also_on_${opposite}_list. `
       : "") +
     (risk ? `${risk} ` : "") +
-    "Reads the current lists, changes only the matching entries (case-insensitive), writes that list (and the other list as read, when the read returned it), " +
-    "then re-reads to verify; not atomic, so concurrent edits can overwrite each other. " +
+    `Reads the current lists, changes only the matching entries (case-insensitive), writes only the ${list} list, ` +
+    "then re-reads to verify both lists; not atomic, so concurrent changes to the same list can overwrite each other. " +
     "Entries: emails, domains, IPv4 addresses, IPv4 wildcards (a.b.c.* or a.b.*.*), or CIDRs from /24 to /32; " +
     "at most 100 per call; no IPv6 and no host wildcards.";
   return {
