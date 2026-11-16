@@ -528,16 +528,16 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
   }
   const body = (result: ToolResult) => JSON.parse(result.content[0].text);
 
-  describe.each(["merge", "replace"] as const)("PATCH behaves as %s", (behaviour) => {
-    it("block add appends, sends both lists once, verifies, and leaves the allow list alone", async () => {
+  describe("when PATCH merges", () => {
+    it("block add appends, sends only the block list once, verifies, and leaves the allow list alone", async () => {
       const { client, get, update } = senderListsClient(scope, {
         allow_list: ["Keep@example.com"], block_list: ["old.example.com"],
-      }, behaviour);
+      });
       const result = await run(client, "block", "add", ["new.example.com"]);
       expect(result.isError).toBeUndefined();
       expect(update).toHaveBeenCalledTimes(1);
       expect(update).toHaveBeenCalledWith(...prefix, {
-        allow_list: ["Keep@example.com"], block_list: ["old.example.com", "new.example.com"],
+        block_list: ["old.example.com", "new.example.com"],
       }, "PATCH");
       expect(get).toHaveBeenCalledTimes(2);
       expect(body(result)).toEqual({
@@ -554,11 +554,9 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
     it("allow add appends to the allow list and leaves the block list alone", async () => {
       const { client, update } = senderListsClient(scope, {
         allow_list: [], block_list: ["Blocked.example.com"],
-      }, behaviour);
+      });
       const result = await run(client, "allow", "add", ["ok@example.com"]);
-      expect(update).toHaveBeenCalledWith(...prefix, {
-        allow_list: ["ok@example.com"], block_list: ["Blocked.example.com"],
-      }, "PATCH");
+      expect(update).toHaveBeenCalledWith(...prefix, { allow_list: ["ok@example.com"] }, "PATCH");
       expect(body(result)).toMatchObject({
         list: "allow", changed: true, verified: true, added: ["ok@example.com"],
         also_on_block_list: [], counts: { allow_list: 1, block_list: 1 }, entries: ["ok@example.com"],
@@ -568,11 +566,9 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
     it("remove deletes every case variant from the target list only", async () => {
       const { client, update } = senderListsClient(scope, {
         allow_list: ["x@example.com"], block_list: ["x@example.com", "X@Example.com", "keep.example.com"],
-      }, behaviour);
+      });
       const result = await run(client, "block", "remove", ["X@example.com", "missing.example.com"]);
-      expect(update).toHaveBeenCalledWith(...prefix, {
-        allow_list: ["x@example.com"], block_list: ["keep.example.com"],
-      }, "PATCH");
+      expect(update).toHaveBeenCalledWith(...prefix, { block_list: ["keep.example.com"] }, "PATCH");
       expect(body(result)).toEqual({
         orgDomain: "example.com", ...(scope === "users" ? { email: "user@example.com" } : {}),
         list: "block", changed: true, verified: true,
@@ -586,7 +582,7 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
     const { client, update } = senderListsClient(scope, { allow_list: [], block_list: [] });
     const result = await run(client, "block", "add", ["A@example.com", "a@EXAMPLE.com", "b@example.com"]);
     expect(body(result).added).toEqual(["A@example.com", "b@example.com"]);
-    expect(update.mock.calls[0][prefix.length]).toEqual({ allow_list: [], block_list: ["A@example.com", "b@example.com"] });
+    expect(update.mock.calls[0][prefix.length]).toEqual({ block_list: ["A@example.com", "b@example.com"] });
   });
 
   it("add skips entries already present (case-insensitive) and makes no write when nothing changes", async () => {
@@ -618,7 +614,7 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
     });
     const result = await run(client, "block", "add", ["Trusted@example.com", "other@example.com"]);
     expect(update).toHaveBeenCalledWith(...prefix, {
-      allow_list: ["trusted@example.com"], block_list: ["Trusted@example.com", "other@example.com"],
+      block_list: ["Trusted@example.com", "other@example.com"],
     }, "PATCH");
     expect(body(result)).toMatchObject({ also_on_allow_list: ["Trusted@example.com"], verified: true });
   });
@@ -626,9 +622,7 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
   it("allow add reports entries that are also on the block list without changing it", async () => {
     const { client, update } = senderListsClient(scope, { allow_list: [], block_list: ["bad@example.com"] });
     const result = await run(client, "allow", "add", ["BAD@example.com"]);
-    expect(update).toHaveBeenCalledWith(...prefix, {
-      allow_list: ["BAD@example.com"], block_list: ["bad@example.com"],
-    }, "PATCH");
+    expect(update).toHaveBeenCalledWith(...prefix, { allow_list: ["BAD@example.com"] }, "PATCH");
     expect(body(result)).toMatchObject({ also_on_block_list: ["BAD@example.com"] });
   });
 
@@ -643,28 +637,27 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
     });
   });
 
-  describe("never writes a list the read did not return", () => {
+  describe("sends only the changed list in the PATCH body", () => {
     const sent = (update: ReturnType<typeof vi.fn>) => update.mock.calls[0][prefix.length] as Record<string, unknown>;
 
-    it("omits the opposite key from the PATCH body when the read left it out", async () => {
-      const { client, update } = senderListsClient(scope, { block_list: ["b.example.com"] });
+    it("block add sends only block_list even when the read returned an allow list", async () => {
+      const { client, update } = senderListsClient(scope, { allow_list: ["Keep@example.com"], block_list: [] });
       const result = await run(client, "block", "add", ["a.example.com"]);
       expect(result.isError).toBeUndefined();
-      expect(sent(update)).toEqual({ block_list: ["b.example.com", "a.example.com"] });
-      expect(Object.hasOwn(sent(update), "allow_list")).toBe(false);
+      expect(Object.keys(sent(update))).toEqual(["block_list"]);
     });
 
-    it("omits the opposite key for an allow-list write too", async () => {
+    it("allow add sends only allow_list even when the read returned a block list", async () => {
+      const { client, update } = senderListsClient(scope, { allow_list: [], block_list: ["bad.example.com"] });
+      const result = await run(client, "allow", "add", ["a.example.com"]);
+      expect(result.isError).toBeUndefined();
+      expect(Object.keys(sent(update))).toEqual(["allow_list"]);
+    });
+
+    it("sends only the target key when the read left the other list out", async () => {
       const { client, update } = senderListsClient(scope, { allow_list: ["a@example.com"] });
       await run(client, "allow", "remove", ["a@example.com"]);
       expect(sent(update)).toEqual({ allow_list: [] });
-      expect(Object.hasOwn(sent(update), "block_list")).toBe(false);
-    });
-
-    it("sends both lists, the opposite exactly as read, when the read returned both", async () => {
-      const { client, update } = senderListsClient(scope, { allow_list: ["Keep@example.com"], block_list: [] });
-      await run(client, "block", "add", ["a.example.com"]);
-      expect(sent(update)).toEqual({ allow_list: ["Keep@example.com"], block_list: ["a.example.com"] });
     });
 
     it("sends only the target key on an add when the read returned {}", async () => {
@@ -672,7 +665,6 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
       const result = await run(client, "allow", "add", ["a.example.com"]);
       expect(body(result)).toMatchObject({ verified: true, counts: { allow_list: 1, block_list: 0 } });
       expect(sent(update)).toEqual({ allow_list: ["a.example.com"] });
-      expect(Object.hasOwn(sent(update), "block_list")).toBe(false);
     });
 
     it("makes no write on a remove when the read returned {}", async () => {
@@ -728,6 +720,22 @@ describe.each(["org", "users"] as const)("%s block/allow list tools", (scope) =>
       expect(result.content[0].text).toContain("could not be confirmed");
       expect(result.content[0].text).toContain("allow");
       expect(result.content[0].text).toContain("keep.example.com");
+    });
+    it("reports an error when a replacing PATCH cleared the opposite list", async () => {
+      const { client } = senderListsClient(scope, { allow_list: ["keep.example.com"], block_list: [] }, "replace");
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("could not be confirmed");
+      expect(result.content[0].text).toContain("allow list differs: 1 missing, 0 unexpected");
+    });
+    it("reports an error when the opposite list was edited between the read and the re-read", async () => {
+      const { client, get } = senderListsClient(scope, { allow_list: [], block_list: [] });
+      get.mockResolvedValueOnce({ allow_list: ["a@example.com"], block_list: [] })
+        .mockResolvedValueOnce({ allow_list: [], block_list: ["a.example.com"] });
+      const result = await run(client, "block", "add", ["a.example.com"]);
+      expect(result.isError).toBe(true);
+      expect(result.content[0].text).toContain("could not be confirmed");
+      expect(result.content[0].text).toContain("allow list differs: 1 missing, 0 unexpected");
     });
     it("keeps the opposite-list problem and the closing guidance within the dispatcher's 300-character cap", async () => {
       const { client } = senderListsClient(scope, {

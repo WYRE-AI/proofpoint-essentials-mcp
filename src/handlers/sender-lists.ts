@@ -107,9 +107,9 @@ function requireEntries(args: Record<string, unknown>): string[] {
 
 /**
  * Copy a sender-lists response, refusing anything that is not clearly a pair of string lists.
- * A key the response omitted is left out of the copy, so a write never invents an empty list
- * for it; readers treat a missing list as empty (itemsOf). Known limit: an empty object (or a
- * 204 / empty body, which the SDK returns as {}) reads as two empty lists.
+ * A key the response omitted is left out of the copy; readers treat a missing list as empty
+ * (itemsOf). Known limit: an empty object (or a 204 / empty body, which the SDK returns as {})
+ * reads as two empty lists.
  */
 function snapshot(value: unknown): Lists {
   const unreadable = () => new ToolInputError("Existing sender lists could not be read safely; refusing update.");
@@ -145,7 +145,7 @@ function describeDifference(name: string, expected: string[], actual: string[]):
   return `the ${name} list differs: ${missing.length} missing, ${unexpected.length} unexpected (first: ${first})`;
 }
 
-/** Read the lists, add or remove entries on one list, write it (and the other list as read), then re-read to verify. */
+/** Read the lists, add or remove entries on one list, write only that list, then re-read and verify both lists. */
 export async function changeSenderList(
   client: ProofpointEssentialsClient,
   args: Record<string, unknown>,
@@ -196,11 +196,11 @@ export async function changeSenderList(
   const updated = action === "add"
     ? [...current, ...changes]
     : current.filter((item) => !changed.has(item.toLowerCase()));
-  // Whether PATCH merges or replaces is unverified against a live account. Sending the
-  // target as modified and the other list exactly as read, but only when the read
-  // returned it, is correct under either behaviour: a list the read omitted is never
-  // written as [].
-  const lists: Lists = { ...before, [target]: updated };
+  // Only the changed list is sent, so the other list is never written: a stale copy of it
+  // cannot overwrite a concurrent edit, and a block-list tool never writes the allow list.
+  // Whether PATCH merges or replaces is unverified against a live account. If it replaced
+  // the whole resource, the re-read below would show the other list gone and fail.
+  const lists: Lists = { [target]: updated };
   if (email === undefined) await client.senderLists.updateOrg(orgDomain, lists, "PATCH");
   else await client.senderLists.updateUser(orgDomain, email, lists, "PATCH");
 
