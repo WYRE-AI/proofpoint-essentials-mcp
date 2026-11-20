@@ -38,6 +38,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a path segment must also be shaped like an email address.
 
 ### Fixed
+- **The HTTP transport no longer exits on a malformed request (WYREAI-741).** The request
+  target was parsed against the client-supplied `Host` header, and a value that does not parse
+  (or a target such as `//`) threw inside the request listener before authentication. The
+  target is now parsed against a fixed base, so `Host` is no longer consulted, and a target
+  that still cannot be parsed gets a `400` JSON response while the server keeps running.
+
 - `proofpoint_essentials_users_get` now validates `email` like `users_update` and
   `users_delete` (email-shaped, no `/`, `..` or other path characters), because the SDK
   now sends it in the URL path (`GET /orgs/{domain}/users/{email}`) instead of as a query
