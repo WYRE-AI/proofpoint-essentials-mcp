@@ -32,7 +32,7 @@ export async function getUser(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const orgDomain = requirePathSegment(args, "orgDomain");
-  // The SDK puts the email in the path (GET /orgs/{domain}/users/{email}), so it gets the same checks as update/delete.
+  // The SDK puts the email in the URL path, so validate it like update/delete.
   const email = requireEmailSegment(args, "email");
   const user = await client.users.get(orgDomain, email);
   return jsonResult(user);
