@@ -10,7 +10,6 @@ import {
   requireObject,
   requireObjectArray,
   requirePathSegment,
-  requireString,
   textResult,
   ToolInputError,
   type ToolResult,
@@ -33,8 +32,8 @@ export async function getUser(
   args: Record<string, unknown>
 ): Promise<ToolResult> {
   const orgDomain = requirePathSegment(args, "orgDomain");
-  // The SDK sends the email as a query parameter here, so it is not a path segment.
-  const email = requireString(args, "email");
+  // The SDK puts the email in the URL path, so validate it like update/delete.
+  const email = requireEmailSegment(args, "email");
   const user = await client.users.get(orgDomain, email);
   return jsonResult(user);
 }
@@ -69,9 +68,10 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 
 /**
- * users.get filters the list endpoint by email, so the response may be a bare
- * array, a {users: [...]} object, or a single user. Return the user whose
- * primary_email matches, or undefined when none does.
+ * Pick the user whose primary_email matches from a users.get response. The
+ * single-user endpoint returns one object, but a bare array or {users: [...]}
+ * is also accepted so an unexpected shape never updates the wrong user.
+ * Returns undefined when none matches.
  */
 function findUser(response: unknown, email: string): Record<string, unknown> | undefined {
   const candidates = Array.isArray(response) ? response

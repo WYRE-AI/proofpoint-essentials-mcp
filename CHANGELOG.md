@@ -38,6 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as a path segment must also be shaped like an email address.
 
 ### Fixed
+- `proofpoint_essentials_users_get` now validates `email` like `users_update` and
+  `users_delete` (email-shaped, no `/`, `..` or other path characters), because the SDK
+  now sends it in the URL path (`GET /orgs/{domain}/users/{email}`) instead of as a query
+  parameter. Before, `..` was accepted and would resolve onto the parent resource.
 - A sender-list write whose verification re-read fails now keeps the vendor status in the
   error (`HTTP 429: ...`) and puts the "check the current lists before retrying" guidance
   first, so the 300-character cap cannot cut it.

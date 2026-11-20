@@ -961,7 +961,7 @@ describe("path-argument safety", () => {
     ["domains_update", { orgDomain: "acme.com", domain: "a.acme.com", data: { x: 1 } }, ["orgDomain", "domain"]],
     ["domains_delete", { orgDomain: "acme.com", domain: "a.acme.com", [CONFIRM_ARG]: true }, ["orgDomain", "domain"]],
     ["users_list", { orgDomain: "acme.com" }, ["orgDomain"]],
-    ["users_get", { orgDomain: "acme.com", email: "a@acme.com" }, ["orgDomain"]],
+    ["users_get", { orgDomain: "acme.com", email: "a@acme.com" }, ["orgDomain", "email"]],
     ["users_create", { orgDomain: "acme.com", users: [{ primary_email: "a@acme.com" }] }, ["orgDomain"]],
     ["users_update", { orgDomain: "acme.com", email: "a@acme.com", data: { surname: "S" } }, ["orgDomain", "email"]],
     ["users_delete", { orgDomain: "acme.com", email: "a@acme.com", [CONFIRM_ARG]: true }, ["orgDomain", "email"]],
@@ -982,14 +982,6 @@ describe("path-argument safety", () => {
     expect(result.isError).toBe(true);
     expect(result.content[0].text).toContain(key);
     expectNoVendorCalls(client);
-  });
-
-  it("users_get still accepts a plain email because it only goes in the query string", async () => {
-    const client = stubClient();
-    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_get", {
-      orgDomain: "acme.com", email: "..",
-    }));
-    expect(result.isError).toBeUndefined();
   });
 
   it.each(["nouser", "@example.org", "user@"])("the email-shape message for %j survives redaction", async (email) => {
