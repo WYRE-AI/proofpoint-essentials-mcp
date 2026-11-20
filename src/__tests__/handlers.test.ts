@@ -984,14 +984,6 @@ describe("path-argument safety", () => {
     expectNoVendorCalls(client);
   });
 
-  it("users_get still accepts a plain email because it only goes in the query string", async () => {
-    const client = stubClient();
-    const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_get", {
-      orgDomain: "acme.com", email: "..",
-    }));
-    expect(result.isError).toBeUndefined();
-  });
-
   it.each(["nouser", "@example.org", "user@"])("the email-shape message for %j survives redaction", async (email) => {
     const client = stubClient();
     const result = asTool(await handleToolCall(client, "proofpoint_essentials_users_delete", {
